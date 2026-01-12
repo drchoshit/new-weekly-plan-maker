@@ -1,0 +1,64 @@
+{
+  "name": "student-schedule-final-v3",
+  "version": "1.0.0",
+  "description": "Student Schedule Management App",
+  "author": "Your Name",
+  "license": "MIT",
+  "main": "electron-main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win",
+    "electron:build": "npm run build && electron-builder --win --publish never"
+  },
+  "build": {
+    "asar": true,
+    "appId": "com.medicalroadmap.student-schedule",
+    "productName": "Student Schedule",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron-main.js",
+      "preload.js", 
+      "build/icon.ico"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false,
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "file-saver": "^2.0.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.8.1",
+    "react-select": "^5.10.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "autoprefixer": "^10.4.14",
+    "electron": "^36.7.4",
+    "electron-builder": "^26.0.12",
+    "postcss": "^8.4.21",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.0.0"
+  }
+}

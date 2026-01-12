@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Print & overflow 조정 */
+@media print {
+  /* 📌 인쇄 비율 축소 (하단 잘림 방지용) */
+  body {
+    zoom: 90%;
+  }
+
+  /* 0) 페이지 크기 및 여백 설정 */
+  @page {
+    size: auto;                 /* 기본 용지 크기 */
+    margin: 10mm 10mm 10mm 10mm;/* 상 우 하 좌 여백 모두 10mm */
+  }
+
+  /* 1) 모든 요소 숨기기 */
+  body * {
+    visibility: hidden;
+  }
+
+  /* 2) print-area 및 자손만 보이게 */
+  #print-area,
+  #print-area * {
+    visibility: visible;
+  }
+
+  /* 3) 인쇄 영역 박스 */
+  #print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    margin: auto;
+    width: auto;
+    padding: 0;
+  }
+
+  /* 4) 컬러 유지 */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* 5) overflow 숨김 */
+  .overflow-x-auto {
+    overflow-x: hidden !important;
+  }
+
+  /* 6) 그리드 & 간격 복원 */
+  .grid {
+    gap: 1rem !important;
+  }
+  .space-y-6 > * + * {
+    margin-top: 1.5rem !important;
+  }
+  .p-3 { padding: 0.75rem !important; }
+  .p-4 { padding: 1rem !important; }
+
+  /* 7) 테이블 셀 여백 최소화 */
+  #print-area th,
+  #print-area td {
+    padding: 0.5rem !important;
+  }
+
+  /* 8) 페이지 분리 없애기 */
+  .break-after-page {
+    page-break-after: auto !important;
+  }
+
+  /* 9) 끊김 방지 */
+  #print-area > div {
+    page-break-inside: avoid !important;
+  }
+}

@@ -1,0 +1,45 @@
+[
+  {
+    "id": 1,
+    "name": "김희서",
+    "mentalCare": "월요일 14:00",
+    "plannerCheck": [
+      "월",
+      "목"
+    ],
+    "headInterview": "토요일 14:00"
+  },
+  {
+    "id": 2,
+    "name": "오시언",
+    "mentalCare": "금요일 10:30",
+    "plannerCheck": [
+      "금"
+    ],
+    "headInterview": "금요일 11:00"
+  },
+  {
+    "id": 3,
+    "name": "김채원",
+    "mentalCare": "수요일 16:00",
+    "plannerCheck": [
+      "화",
+      "수",
+      "목",
+      "금"
+    ],
+    "headInterview": "토요일 09:30"
+  },
+  {
+    "id": 4,
+    "name": "강태이",
+    "mentalCare": "목요일 13:30",
+    "plannerCheck": [
+      "월",
+      "화",
+      "목",
+      "금"
+    ],
+    "headInterview": "토요일 10:00"
+  }
+]

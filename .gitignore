@@ -1,0 +1,8 @@
+node_modules
+dist
+dist_electron
+win-unpacked
+*.exe
+*.blockmap
+builder-debug.yml
+builder-effective-config.yaml
