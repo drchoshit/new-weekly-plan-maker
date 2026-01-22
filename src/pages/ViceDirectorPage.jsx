@@ -10,6 +10,7 @@ export default function Page7() {
   const {
     students,
     attendance,
+    selectedPeriod, // 🔥 추가
     studentInterviewAssignments,
     setStudentInterviewAssignments
   } = useContext(ScheduleContext);
@@ -79,37 +80,58 @@ export default function Page7() {
   };
 
   const getStudentAvailableSlots = (id) => {
-    const stuAttendance = attendance[id] || {};
+    // 🔥 주차 기준 attendance 사용
+    const stuAttendance =
+      attendance?.[selectedPeriod]?.[id] || {};
+
     const slots = [];
+
     for (const day of days) {
       const stu = stuAttendance[day];
       const work = interviewSettings[day];
+
       if (!stu || !stu[0] || !stu[1] || !work?.start || !work?.end) continue;
+
       const sStart = timeToMinutes(stu[0]);
       const sEnd = timeToMinutes(stu[1]);
       const wStart = timeToMinutes(work.start);
       const wEnd = timeToMinutes(work.end);
+
       const start = Math.max(sStart, wStart);
       const end = Math.min(sEnd, wEnd);
+
       if (end - start >= duration) {
-        const possible = generateSlots(minutesToTime(start), minutesToTime(end), duration);
+        const possible = generateSlots(
+          minutesToTime(start),
+          minutesToTime(end),
+          duration
+        );
+
         for (const { start: slotStart, end: slotEnd } of possible) {
           slots.push({ day, start: slotStart, end: slotEnd });
         }
       }
     }
+
     return slots;
   };
 
+
   const getWeeklyMinutes = (id) => {
-    const rec = attendance[id] || {};
+    // 🔥 주차 기준 attendance 사용
+    const rec =
+      attendance?.[selectedPeriod]?.[id] || {};
+
     let total = 0;
+
     for (const times of Object.values(rec)) {
       if (!times || !times[0] || !times[1]) continue;
       total += timeToMinutes(times[1]) - timeToMinutes(times[0]);
     }
+
     return total;
   };
+
 
   const forceAssign = (day, name, start, end) => {
     setInterviewSchedule(prev => {
