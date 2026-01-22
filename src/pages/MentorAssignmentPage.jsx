@@ -16,24 +16,37 @@ const exploreOptions = [
 
 const days = ["월", "화", "수", "목", "금", "토"];
 
+// ✅ STEP 3-1: 선택된 멘토가 오는 요일 목록 계산
+const getMentorDays = (mentorName, mentorsByDay) => {
+  if (!mentorName) return [];
+
+  return days.filter((day) => {
+    const mentors = mentorsByDay[day] || [];
+    return mentors.some((m) => m.name === mentorName);
+  });
+};
+
 const MentorAssignmentPage = () => {
-  const {
-    assignments, setAssignments,
-    students, setStudents,
-    mentorsByDay,
-    attendance
-  } = useContext(ScheduleContext);
-
-  const [modalContent, setModalContent] = useState(null);
-
+  // ✅ 신입생 여부 기본값 보장 (기존 학생 데이터 보호)
   useEffect(() => {
     setStudents(prev =>
       prev.map(s => ({
         ...s,
-        attendance: attendance[s.id] || {}
+        isNewStudent: s.isNewStudent ?? false,
       }))
     );
-  }, [attendance]);
+  }, []);
+
+  const {
+    assignments, setAssignments,
+    students, setStudents,
+    mentorsByDay,
+    attendance,
+    selectedPeriod,
+    currentPeriodId,
+  } = useContext(ScheduleContext);
+
+  const [modalContent, setModalContent] = useState(null);
 
   const updateStudent = (id, field, value) => {
     setStudents(prev =>
@@ -42,8 +55,40 @@ const MentorAssignmentPage = () => {
   };
 
   const assignMentors = () => {
-    const result = assignMentorsToStudents({ students, mentorsByDay });
+    console.log("selectedPeriod:", selectedPeriod);
+    console.log("currentPeriodId:", currentPeriodId);
+    console.log(
+      "attendance[selectedPeriod]:",
+      attendance[selectedPeriod]
+    );
+    console.log(
+      "attendance[currentPeriodId]:",
+      attendance[currentPeriodId]
+    );
+
+    if (!currentPeriodId) {
+      alert("기준 주가 확정되지 않았습니다.\n인쇄 페이지에서 '날짜 변경 확정'을 먼저 하세요.");
+      return;
+    }
+
+    const periodAttendance = attendance[selectedPeriod] || {};
+
+    // 🔥 신입생만 자동 배정 대상
+    const newStudents = students.filter(s => s.isNewStudent);
+
+    const result = assignMentorsToStudents({
+      students: newStudents,
+      mentorsByDay,
+      attendanceByPeriod: attendance,
+      currentPeriodId,
+    });
+
     setAssignments(result);
+
+    // ✅ 자동배정 결과는 assignments로만 관리
+    // (선택 멘토 / mentorHistory는 여기서 건드리지 않음)
+
+    alert(`자동 배정 완료\n기준 주: ${currentPeriodId}`);
   };
 
   const showModal = (text) => {
@@ -53,6 +98,37 @@ const MentorAssignmentPage = () => {
   const closeModal = () => {
     setModalContent(null);
   };
+
+  const setSelectedMentorAndFreezeInitial = (
+    studentId,
+    mentorName,
+    source = "manual"
+  ) => {
+    if (!mentorName) return;
+
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+
+        // 1️⃣ 선택 멘토 갱신
+        const next = {
+          ...s,
+          selectedMentor: mentorName,
+        };
+
+        // 2️⃣ 최초 멘토가 없을 때만 박제 (🔥 핵심)
+        next.initialMentor = {
+          mentor: mentorName,
+          day: "",
+          periodId: currentPeriodId || "initial",
+          createdAt: Date.now(),
+        };
+        return next;
+      })
+    );
+  };
+
+
 
   // ✅ ESC 키로 모달 닫기
   useEffect(() => {
@@ -73,7 +149,9 @@ const MentorAssignmentPage = () => {
     let matchFound = false;
 
     for (const day of days) {
-      const sTime = student.attendance?.[day];
+      const periodAttendance = attendance[selectedPeriod] || {};
+      const sTime = periodAttendance[student.id]?.[day];
+
       if (!sTime || sTime.length < 2) {
         result.push(`${day} ⛔ (출결 없음)`);
         continue;
@@ -111,6 +189,29 @@ const MentorAssignmentPage = () => {
     );
   };
 
+  // ✅ 요일별 멘토링 현황 계산 (화면 표시용)
+  const mentoringByDay = days.reduce((acc, day) => {
+    acc[day] = {};
+
+    students.forEach((s) => {
+      const mentor = s.selectedMentor;
+      if (!mentor) return;
+
+      const periodAttendance = attendance[selectedPeriod] || {};
+      const studentTime = periodAttendance[s.id]?.[day];
+      if (!studentTime || studentTime.length < 2) return;
+
+      const mentors = mentorsByDay[day] || [];
+      const mentorInfo = mentors.find(m => m.name === mentor);
+      if (!mentorInfo) return;
+
+      if (!acc[day][mentor]) acc[day][mentor] = [];
+      acc[day][mentor].push(s.name);
+    });
+
+    return acc;
+  }, {});
+
   // ✅ 추가: 전체 검증 (모든 학생을 검사하여 불일치 학생만 모아서 팝업)
   const checkAllOverlaps = () => {
     const fails = [];
@@ -127,7 +228,9 @@ const MentorAssignmentPage = () => {
       const lines = [];
 
       for (const day of days) {
-        const sTime = s.attendance?.[day];
+        const periodAttendance = attendance[selectedPeriod] || {};
+        const sTime = periodAttendance[s.id]?.[day];
+
         if (!sTime || sTime.length < 2) {
           lines.push(`${day} ⛔ (출결 없음)`);
           continue;
@@ -173,13 +276,13 @@ const MentorAssignmentPage = () => {
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-2xl font-bold mb-2">6페이지: 자동 멘토 배정</h1>
-
       <button
         onClick={assignMentors}
         className="bg-blue-500 text-white px-4 py-2 rounded"
       >
         자동 배정 실행
       </button>
+
       {/* ✅ 전체 검증 버튼 */}
       <button
         onClick={checkAllOverlaps}
@@ -193,6 +296,7 @@ const MentorAssignmentPage = () => {
         <table className="w-full table-auto border-collapse text-center">
           <thead className="sticky top-0 bg-gray-100 z-10">
             <tr>
+              <th className="border p-2">신입</th>   {/* 🔥 추가 */}
               <th className="border p-2">이름</th>
               <th className="border p-2">태어난 해</th>
               <th className="border p-2">성격</th>
@@ -213,8 +317,55 @@ const MentorAssignmentPage = () => {
             {students.map(s => {
               const assign = assignments.find(a => a.studentId === s.id) || {};
               return (
-                <tr key={s.id}>
-                  <td className="border p-1">{s.name}</td>
+                <tr
+                  key={s.id}
+                  className={
+                    s.isNewStudent
+                      ? ""
+                      : "bg-gray-100 text-gray-400 opacity-60"
+                  }
+                >
+
+                  {/* 🔥 신입생 체크박스 */}
+                  <td className="border p-1 text-center">
+                    <input
+                      type="checkbox"
+                      checked={!!s.isNewStudent}
+                      onChange={(e) => {
+                        const nextChecked = e.target.checked; // true=신입 유지, false=재학생 전환
+
+                        setStudents(prev =>
+                          prev.map(st => {
+                            if (st.id !== s.id) return st;
+
+                            // 신입으로 다시 켜는 건 상태만 변경
+                            if (nextChecked) {
+                              return { ...st, isNewStudent: true };
+                            }
+
+                            // 여기부터: 신입 해제(재학생 전환)
+                            const selected = (st.selectedMentor || "").trim();
+
+            
+                            return {
+                              ...st,
+                              isNewStudent: false,
+                            };
+                          })
+                        );
+                      }}
+                    />
+
+                  </td>
+                  <td className="border p-1">
+                    {s.name}
+                    {!s.isNewStudent && (
+                      <span className="ml-1 text-xs bg-gray-300 text-gray-700 px-1 rounded">
+                        재학생
+                      </span>
+                    )}
+                  </td>
+
                   <td className="border p-1">
                     <input
                       type="number"
@@ -235,20 +386,32 @@ const MentorAssignmentPage = () => {
                     </select>
                   </td>
                   <td className="border p-1">
-                    <Select options={koreanOptions} value={koreanOptions.find(o => o.value === s.korean) || null}
-                      onChange={opt => updateStudent(s.id, "korean", opt?.value || "")} />
+                    <Select
+                      options={koreanOptions}
+                      value={koreanOptions.find(o => o.value === s.korean) || null}
+                      onChange={opt => updateStudent(s.id, "korean", opt?.value || "")}
+                    />
                   </td>
                   <td className="border p-1">
-                    <Select options={mathOptions} value={mathOptions.find(o => o.value === s.math) || null}
-                      onChange={opt => updateStudent(s.id, "math", opt?.value || "")} />
+                    <Select
+                      options={mathOptions}
+                      value={mathOptions.find(o => o.value === s.math) || null}
+                      onChange={opt => updateStudent(s.id, "math", opt?.value || "")}
+                    />
                   </td>
                   <td className="border p-1">
-                    <Select options={exploreOptions} value={exploreOptions.find(o => o.value === s.explore1) || null}
-                      onChange={opt => updateStudent(s.id, "explore1", opt?.value || "")} />
+                    <Select
+                      options={exploreOptions}
+                      value={exploreOptions.find(o => o.value === s.explore1) || null}
+                      onChange={opt => updateStudent(s.id, "explore1", opt?.value || "")}
+                    />
                   </td>
                   <td className="border p-1">
-                    <Select options={exploreOptions} value={exploreOptions.find(o => o.value === s.explore2) || null}
-                      onChange={opt => updateStudent(s.id, "explore2", opt?.value || "")} />
+                    <Select
+                      options={exploreOptions}
+                      value={exploreOptions.find(o => o.value === s.explore2) || null}
+                      onChange={opt => updateStudent(s.id, "explore2", opt?.value || "")}
+                    />
                   </td>
                   <td className="border p-1">
                     <input
@@ -264,22 +427,52 @@ const MentorAssignmentPage = () => {
                       className="w-24 border p-1"
                     />
                   </td>
-                  <td className="border p-1">{s.selectedMentor || ""}</td>
-                  <td className="border p-1 cursor-pointer hover:bg-yellow-100"
+                  <td className="border p-1 text-sm">
+                    <div className="font-semibold">
+                      {s.selectedMentor || ""}
+                    </div>
+                    {s.selectedMentor && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        {getMentorDays(s.selectedMentor, mentorsByDay).join(", ")}
+                      </div>
+                    )}
+                  </td>
+
+                  <td
+                    className="border p-1 cursor-pointer hover:bg-yellow-100"
                     onClick={() => {
-                      updateStudent(s.id, "selectedMentor", assign.first);
+                      setSelectedMentorAndFreezeInitial(
+                        s.id,
+                        assign.first,
+                        "manual" // 🔥 관리자 선택
+                      );
                       showModal(assign.reasons?.first || "이유 없음");
-                    }}>{assign.first || ""}</td>
-                  <td className="border p-1 cursor-pointer hover:bg-yellow-100"
+                    }}
+                  >
+                    {assign.first || ""}
+                  </td>
+                  <td
+                    className="border p-1 cursor-pointer hover:bg-yellow-100"
                     onClick={() => {
-                      updateStudent(s.id, "selectedMentor", assign.second);
+                      setSelectedMentorAndFreezeInitial(
+                        s.id,
+                        assign.second,
+                        "manual"
+                      );
                       showModal(assign.reasons?.second || "이유 없음");
-                    }}>{assign.second || ""}</td>
-                  <td className="border p-1 cursor-pointer hover:bg-yellow-100"
+                    }}
+                  >
+                    {assign.second || ""}
+                  </td>
+                  <td
+                    className="border p-1 cursor-pointer hover:bg-yellow-100"
                     onClick={() => {
-                      updateStudent(s.id, "selectedMentor", assign.third);
+                      setSelectedMentorAndFreezeInitial(s.id, assign.third);
                       showModal(assign.reasons?.third || "이유 없음");
-                    }}>{assign.third || ""}</td>
+                    }}
+                  >
+                    {assign.third || ""}
+                  </td>
                   <td className="border p-1">
                     <button
                       onClick={() => checkOverlap(s)}
@@ -293,6 +486,40 @@ const MentorAssignmentPage = () => {
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* ✅ 요일별 멘토링 진행 현황 */}
+      <div className="mt-8">
+        <h2 className="text-xl font-semibold mb-4">
+          요일별 멘토링 진행 현황
+        </h2>
+
+        <div className="grid grid-cols-2 gap-4">
+          {days.map(day => (
+            <div key={day} className="border rounded p-3 bg-white shadow-sm">
+              <h3 className="font-bold mb-2">{day}요일</h3>
+
+              {Object.keys(mentoringByDay[day]).length === 0 ? (
+                <div className="text-sm text-gray-400">
+                  배정된 멘토링 없음
+                </div>
+              ) : (
+                Object.entries(mentoringByDay[day]).map(([mentor, students]) => (
+                  <div key={mentor} className="mb-2">
+                    <div className="font-semibold text-sm">
+                      {mentor} ({students.length}명)
+                    </div>
+                    <ul className="list-disc pl-5 text-sm">
+                      {students.map(name => (
+                        <li key={name}>{name}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="mt-8">

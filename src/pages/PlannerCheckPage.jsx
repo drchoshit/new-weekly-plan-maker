@@ -1,9 +1,53 @@
 // src/pages/PlannerCheckPage.jsx
-import React, { useState, useEffect } from 'react';
 import { useSchedule } from '../context/ScheduleContext';
 import { timeToMinutes, minutesToTime, generateSlots } from '../utils/scheduler';
+import React, { useState, useEffect } from 'react';
 
-const days = ['월', '화', '수', '목', '금', '토'];
+const days = ["월", "화", "수", "목", "금", "토"];
+
+const dayIndexMap = {
+  "월": 0,
+  "화": 1,
+  "수": 2,
+  "목": 3,
+  "금": 4,
+  "토": 5,
+};
+
+// 🔹 멘토링 기준 요일 계산
+const getMentoringAnchorDay = ({
+  student,
+  mentorsByDay,
+  attendanceByPeriod,
+  currentPeriodId,
+}) => {
+  // 재학생: 이번 주 확정 멘토 요일
+  if (!student.isNewStudent) {
+    return student?.mentorHistory?.[currentPeriodId]?.day || null;
+  }
+
+  // 신입생: 선택멘토 + 출결 겹치는 요일 중 월→토 가장 앞 요일
+  const mentorName = student.selectedMentor;
+  if (!mentorName) return null;
+
+  for (const day of days) {
+    const mentors = mentorsByDay[day] || [];
+    const hasMentor = mentors.some(m => m.name === mentorName);
+    const hasAttendance =
+      attendanceByPeriod?.[currentPeriodId]?.[student.id]?.[day];
+
+    if (hasMentor && hasAttendance) {
+      return day;
+    }
+  }
+
+  return null;
+};
+
+const getDayDistance = (anchorDay, targetDay) => {
+  if (!anchorDay) return 0;
+  return Math.abs(dayIndexMap[targetDay] - dayIndexMap[anchorDay]);
+};
 
 // ✅ 전략 상수 (+ MAX_COVER 추가)
 const STRATEGY = {
@@ -17,17 +61,31 @@ const STRATEGY = {
   MAX_COVER: 'MAX_COVER',
 };
 
+function normalizeAttendancePair(value) {
+  if (Array.isArray(value) && value.length === 2) {
+    const [a, b] = value;
+    if (!a || !b) return null;
+    return [a.trim(), b.trim()];
+  }
+  return null;
+}
+
 export default function PlannerCheckPage() {
   const {
     students,
     setStudents,
+    attendance,
+    mentorsByDay,
+    currentPeriodId,
     noticeMessage,
     setNoticeMessage,
     monthlyNotice,
-    setMonthlyNotice
+    setMonthlyNotice,
+    setPlannerScheduleByDay,   // 🔥 추가
   } = useSchedule();
 
   const [searchText, setSearchText] = useState('');
+  const [useMentoringDistance, setUseMentoringDistance] = useState(false); // ✅ 추가
 
   // Checker hours & session length
   const defaultTime = days.reduce(
@@ -199,7 +257,6 @@ export default function PlannerCheckPage() {
         });
       });
     }
-
     const nStudents = students.length;
     const nDays = days.length;
     const nSlots = allSlots.length;
@@ -236,9 +293,33 @@ export default function PlannerCheckPage() {
     });
 
     // ✅ 핵심 수정: student -> student-day 엣지 추가 순서를 전략별 요일 순서로
-    students.forEach((_, i) => {
+    students.forEach((s, i) => {
       const u = studentStart + i;
-      const order = (strategy && strategy !== STRATEGY.NIGHT_FIRST) ? getDayOrderByStrategy(strategy) : days;
+
+      let order =
+        (strategy && strategy !== STRATEGY.NIGHT_FIRST)
+          ? getDayOrderByStrategy(strategy)
+          : days;
+
+      // ✅ 멘토링 기준 거리 고려 옵션
+      if (useMentoringDistance) {
+        const anchorDay = getMentoringAnchorDay({
+          student: s,
+          mentorsByDay,
+          attendanceByPeriod: attendance,
+          currentPeriodId,
+        });
+
+        if (anchorDay) {
+          order = [...order].sort((a, b) => {
+            const da = getDayDistance(anchorDay, a);
+            const db = getDayDistance(anchorDay, b);
+            if (da !== db) return db - da;           // 🔥 거리 큰 요일 우선
+            return dayIndexMap[a] - dayIndexMap[b]; // 월 → 토 안정 정렬
+          });
+        }
+      }
+
       order.forEach(day => {
         const di = days.indexOf(day);
         const v = studentDayStart + i * nDays + di;
@@ -246,32 +327,38 @@ export default function PlannerCheckPage() {
       });
     });
 
+
     // student-day -> slot (if eligible)
     // allSlots의 현재 순서가 BFS 순서에 반영됨
     students.forEach((s, i) => {
       for (let di = 0; di < nDays; di++) {
-        const att = s.attendance?.[days[di]];
-        const ranges = checkerTime[days[di]] || [];
-        if (!Array.isArray(att) || att.length !== 2) continue;
+
+        // 🔥 실제 출결 구조로 접근
+        const raw =
+          attendance?.[currentPeriodId]?.[s.id]?.[days[di]];
+
+        const att = normalizeAttendancePair(raw);
+        if (!att) continue;
+
         const s0 = timeToMinutes(att[0]);
         const s1 = timeToMinutes(att[1]);
         const uDay = studentDayStart + i * nDays + di;
 
-        // 체커 범위와 학생 가능 범위를 동시에 만족하는 슬롯에만 엣지
-        if (ranges.some(r => r.start && r.end)) {
-          allSlots.forEach((slot, j) => {
-            if (
-              slot.di === di &&
-              s0 <= timeToMinutes(slot.start) &&
-              timeToMinutes(slot.end) <= s1
-            ) {
-              const v = slotStart + j;
-              addEdge(uDay, v, 1);
-            }
-          });
-        }
+        allSlots.forEach((slot, j) => {
+          if (slot.di !== di) return;
+
+          const slotStartMin = timeToMinutes(slot.start);
+          const slotEndMin   = timeToMinutes(slot.end);
+
+          // 🔥 실질적으로 겹치면 허용
+          if (Math.min(s1, slotEndMin) - Math.max(s0, slotStartMin) >= sessionDuration) {
+            const v = slotStart + j;
+            addEdge(uDay, v, 1);
+          }
+        });
       }
     });
+
 
     // slot -> T
     allSlots.forEach((_, j) => {
@@ -295,7 +382,8 @@ export default function PlannerCheckPage() {
           schedule[slot.day].push({
             start: slot.start,
             end: slot.end,
-            student: s.name
+            student: s.name,
+            studentId: s.id   // 🔥 추가
           });
           assigned++;
         }
@@ -316,15 +404,90 @@ export default function PlannerCheckPage() {
     return { schedule, reasons };
   };
 
+  const generatePlannerScheduleByDistance = () => {
+    const newSchedule = {
+      "월": [], "화": [], "수": [], "목": [], "금": [], "토": []
+    };
+
+    const usedSlots = {
+      "월": [], "화": [], "수": [], "목": [], "금": [], "토": []
+    };
+
+    students.forEach(student => {
+      const anchorDay = getMentoringAnchorDay({
+        student,
+        mentorsByDay,
+        attendanceByPeriod: attendance,
+        currentPeriodId,
+      });
+
+      const candidateDays = days
+        .filter(day => {
+          const att = attendance?.[currentPeriodId]?.[student.id]?.[day];
+          return Array.isArray(att) && att[0] && att[1];
+        })
+        .sort((a, b) => {
+          const da = getDayDistance(anchorDay, a);
+          const db = getDayDistance(anchorDay, b);
+          if (da !== db) return db - da;          // 거리 큰 요일 우선
+          return dayIndexMap[a] - dayIndexMap[b]; // 월 → 화 → 수 → 목 → 금 → 토
+        });
+
+      let assigned = false;
+
+      for (const day of candidateDays) {
+        const ranges = checkerTime?.[day] || [];
+
+        for (const range of ranges) {
+          if (!range.start || !range.end) continue;
+
+          const slots = generateSlots(
+            range.start,
+            range.end,
+            sessionDuration
+          );
+
+          for (const slot of slots) {
+            const isUsed = usedSlots[day].some(
+              s => s.start === slot.start && s.end === slot.end
+            );
+            if (isUsed) continue;
+
+            newSchedule[day].push({
+              studentId: student.id,
+              student: student.name,
+              start: slot.start,
+              end: slot.end,
+            });
+
+            usedSlots[day].push(slot);
+            assigned = true;
+            break;
+          }
+
+          if (assigned) break;
+        }
+
+        if (assigned) break;
+      }
+    });
+
+    setScheduleByDay(newSchedule);
+    setPlannerScheduleByDay(newSchedule); // 🔥 추가
+  };
+
   const handleAssignClick = () => {
     const { schedule, reasons } = generatePlannerSchedule();
     setScheduleByDay(schedule);
+    setPlannerScheduleByDay(schedule); // 🔥 추가
+
     if (reasons.length) {
       alert('미배정:\n' + reasons.join('\n'));
     } else {
       alert('플래너 체크 자동 배정 완료');
     }
   };
+
 
   // 전략 실행
   const handleAssignWithStrategy = (strategy) => {
@@ -360,6 +523,7 @@ export default function PlannerCheckPage() {
       });
 
       setScheduleByDay(best.schedule);
+      setPlannerScheduleByDay(best.schedule); // 🔥 추가
       const msg =
         `최대 배분 모드 완료\n- 선택된 전략: ${bestName}\n- 총 누락 회수: ${bestEval.totalMissing}\n- 누락 학생 수: ${bestEval.missingStudents}`;
       alert(msg);
@@ -368,6 +532,7 @@ export default function PlannerCheckPage() {
 
     const { schedule, reasons } = generatePlannerSchedule(strategy);
     setScheduleByDay(schedule);
+    setPlannerScheduleByDay(schedule); // 🔥 추가
     if (reasons.length) {
       alert('미배정:\n' + reasons.join('\n'));
     } else {
@@ -553,13 +718,29 @@ export default function PlannerCheckPage() {
       </div>
 
       {/* Actions */}
+      <div className="flex items-center gap-4 mb-2">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={useMentoringDistance}
+            onChange={e => setUseMentoringDistance(e.target.checked)}
+          />
+          멘토링 기준 거리 고려
+        </label>
+      </div>
+
       <div className="flex flex-wrap gap-2">
-        {/* 기존 기본 버튼 */}
         <button
           onClick={handleAssignClick}
           className="px-4 py-2 bg-blue-700 text-white rounded"
         >
           자동 배정 시작하기
+        </button>      
+        <button
+          onClick={generatePlannerScheduleByDistance}
+          className="ml-2 bg-indigo-600 text-white px-3 py-1 rounded"
+        >
+          멘토링 기준 거리 자동배정
         </button>
 
         {/* 6개 요일 우선 버튼 */}

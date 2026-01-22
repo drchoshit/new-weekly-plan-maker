@@ -7,11 +7,17 @@ import { saveAs } from "file-saver";
 const days = ["월", "화", "수", "목", "금", "토"];
 
 export default function AttendancePage() {
-  const { students, setStudents, attendance, setAttendance, startDate, endDate } = useSchedule();
+  const {
+    students, setStudents,
+    attendance, setAttendance,
+    mentorsByDay,
+    startDate, endDate,
+    periods, setPeriods,
+    selectedPeriod, setSelectedPeriod,
+  } = useSchedule();
 
-  const [search, setSearch] = useState("");
   const [searchValue, setSearchValue] = useState("");
-  const [excelOnlyStudentNames, setExcelOnlyStudentNames] = useState([]); // ✅ 추가
+  const [search, setSearch] = useState("");
 
   // ✅ 추가: 복수 삭제(선택 모드)
   const [selectionMode, setSelectionMode] = useState(false);
@@ -25,11 +31,26 @@ export default function AttendancePage() {
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, seatNumber: value } : s)));
   };
   const updateTime = (id, day, index, value) => {
+    if (!selectedPeriod) return;
+
     setAttendance(prev => {
       const next = { ...prev };
-      const per = Array.isArray(next[id]?.[day]) ? [...next[id][day]] : ["", ""];
+      const periodAtt = { ...(next[selectedPeriod] || {}) };
+      const studentAtt = { ...(periodAtt[id] || {}) };
+      const per = Array.isArray(studentAtt[day]) ? [...studentAtt[day]] : [];
+
       per[index] = value;
-      next[id] = { ...(next[id] || {}), [day]: per };
+
+      // 둘 다 비어 있으면 출결 없음 처리
+      if (!per[0] && !per[1]) {
+        delete studentAtt[day];
+      } else {
+        studentAtt[day] = [per[0] || "", per[1] || ""];
+      }
+
+      periodAtt[id] = studentAtt;
+      next[selectedPeriod] = periodAtt;
+
       return next;
     });
   };
@@ -57,18 +78,16 @@ export default function AttendancePage() {
   const addStudent = () => {
     const newStudent = { id: Date.now(), name: "", seatNumber: "" };
     setStudents(prev => [...prev, newStudent]);
-    setAttendance(prev => ({
-      ...prev,
-      [newStudent.id]: {}
-    }));
   };
 
   const deleteStudent = id => {
     setStudents(prev => prev.filter(s => s.id !== id));
     setAttendance(prev => {
-      const copy = { ...prev };
-      delete copy[id];
-      return copy;
+      const next = { ...prev };
+      Object.keys(next).forEach(pid => {
+        if (next[pid]) delete next[pid][id];
+      });
+      return next;
     });
   };
 
@@ -76,6 +95,8 @@ export default function AttendancePage() {
     if (window.confirm("전체 학생 데이터를 삭제하시겠습니까?")) {
       setStudents([]);
       setAttendance({});
+      setPeriods([]);
+      setSelectedPeriod("");
     }
   };
 
@@ -100,6 +121,17 @@ export default function AttendancePage() {
     }
     setSelectedIds(new Set(list.map(s => s.id)));
   };
+
+  // ✅ [추가] 바로 이전 주차(period) id 구하기
+  const getPrevPeriodId = (periods, currentId) => {
+    const idx = (periods || []).findIndex(p => p.id === currentId);
+    if (idx <= 0) return null;
+    return periods[idx - 1].id;
+  };
+
+  // ================================
+  // 🗑 선택 삭제
+  // ================================
   const deleteSelectedRows = () => {
     if (selectedIds.size === 0) {
       alert("삭제할 학생을 선택하세요.");
@@ -110,15 +142,21 @@ export default function AttendancePage() {
     setStudents(prev => prev.filter(s => !selectedIds.has(s.id)));
     setAttendance(prev => {
       const next = { ...prev };
-      for (const id of selectedIds) delete next[id];
+      Object.keys(next).forEach(pid => {
+        selectedIds.forEach(id => {
+          if (next[pid]) delete next[pid][id];
+        });
+      });
       return next;
     });
     setSelectedIds(new Set());
     setSelectionMode(false);
   };
 
+
   const calculateWeeklyTotal = studentId => {
-    const att = attendance[studentId] || {};
+    if (!selectedPeriod) return "0시간 0분";
+    const att = attendance[selectedPeriod]?.[studentId] || {};
     const totalMinutes = days.reduce((sum, d) => {
       const times = att[d];
       if (Array.isArray(times) && times[0] && times[1]) {
@@ -146,6 +184,17 @@ export default function AttendancePage() {
         }`;
       })
       .join(", ");
+  // 주차 키를 만들어진 순서대로 정렬(저장된 periods 순서대로)
+  const periodIds = (periods || []).map(p => p.id);
+
+  // 학생의 특정 주차 멘토 히스토리 텍스트 만들기
+  const getMentorHistoryText = (student, periodId) => {
+    const item = student?.mentorHistory?.[periodId];
+    if (!item) return "";
+    const mentor = item.mentor || "";
+    const day = item.day || "";
+    return day ? `${mentor} (${day})` : mentor;
+  };
 
   const handleSortByName = () => {
     const sorted = [...students].sort((a, b) =>
@@ -170,7 +219,153 @@ export default function AttendancePage() {
     setSearch(searchValue.trim());
   };
 
-  const filteredStudents = students.filter(s => s.name.includes(search));
+  const filteredStudents = students.filter(s =>
+    s.name.includes(searchValue.trim())
+  );
+
+  // ✅ 실제 엑셀 업로드 + 자동 입력 로직 (최종)
+  const handleUploadExcel = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!selectedPeriod) {
+      alert("주차를 먼저 선택하세요.");
+      e.target.value = "";
+      return;
+    }
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+
+      // ✅ 시트 선택: '센터일정' 우선, 없으면 첫 시트
+      const sheetName = workbook.SheetNames.includes("센터일정")
+        ? "센터일정"
+        : workbook.SheetNames[0];
+
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        blankrows: false,
+        defval: "",
+      });
+
+      // ✅ 헤더 행 찾기 (이름 + 요일 포함된 행)
+      const headerRowIndex = rows.findIndex(row =>
+        row.includes("이름") && days.some(d => row.includes(d))
+      );
+
+      if (headerRowIndex === -1) {
+        alert("엑셀에서 헤더(이름/요일)를 찾을 수 없습니다.");
+        return;
+      }
+
+      const header = rows[headerRowIndex];
+      const colIndex = {};
+      header.forEach((h, i) => {
+        if (h) colIndex[String(h).trim()] = i;
+      });
+
+      const nameCol = colIndex["이름"];
+      if (nameCol == null) {
+        alert("엑셀에 '이름' 컬럼이 없습니다.");
+        return;
+      }
+
+      // 요일 컬럼 인덱스
+      const dayCols = {};
+      days.forEach(d => {
+        if (colIndex[d] != null) dayCols[d] = colIndex[d];
+      });
+
+      const nextAttendance = { ...attendance };
+      nextAttendance[selectedPeriod] = nextAttendance[selectedPeriod] || {};
+
+      const nextStudents = [...students];
+      const nameToStudent = {};
+      students.forEach(s => {
+        if (s.name) nameToStudent[s.name] = s;
+      });
+
+      // ===============================
+      // 🔥 핵심: 시간 선택 규칙
+      // - 복수 구간 → 22시 이하 중 가장 늦은 구간
+      // ===============================
+      const pickBestRange = (cell) => {
+        if (!cell || typeof cell !== "string") return null;
+
+        const ranges = cell
+          .split(",")
+          .map(s => s.trim())
+          .map(s => {
+            if (!s.includes("~")) return null;
+            const [st, en] = s.split("~").map(x => x.trim());
+            const stMin = timeToMinutes(st);
+            let enMin = timeToMinutes(en);
+            if (enMin < stMin) enMin += 1440; // 새벽 보정
+            return { st, en, enMin };
+          })
+          .filter(Boolean);
+
+        if (ranges.length === 0) return null;
+
+        const limit = 22 * 60;
+        const under22 = ranges.filter(r => r.enMin <= limit);
+
+        if (under22.length > 0) {
+          under22.sort((a, b) => b.enMin - a.enMin);
+          return under22[0];
+        }
+
+        // 전부 22시 초과면 가장 가까운 것
+        ranges.sort(
+          (a, b) =>
+            Math.abs(a.enMin - limit) - Math.abs(b.enMin - limit)
+        );
+        return ranges[0];
+      };
+
+      // ===============================
+      // 📥 데이터 파싱
+      // ===============================
+      for (let r = headerRowIndex + 1; r < rows.length; r++) {
+        const row = rows[r];
+        const name = String(row[nameCol] || "").trim();
+        if (!name) continue;
+
+        let student = nameToStudent[name];
+        if (!student) {
+          student = { id: Date.now() + Math.random(), name, seatNumber: "" };
+          nextStudents.push(student);
+          nameToStudent[name] = student;
+        }
+
+        const sid = student.id;
+        nextAttendance[selectedPeriod][sid] =
+          nextAttendance[selectedPeriod][sid] || {};
+
+        days.forEach(day => {
+          const cell = row[dayCols[day]];
+          const picked = pickBestRange(cell);
+          if (picked) {
+            nextAttendance[selectedPeriod][sid][day] = [picked.st, picked.en];
+          } else {
+            delete nextAttendance[selectedPeriod][sid][day];
+          }
+        });
+      }
+
+      setStudents(nextStudents);
+      setAttendance(nextAttendance);
+
+    } catch (err) {
+      console.error(err);
+      alert("엑셀 처리 중 오류가 발생했습니다.");
+    }
+
+    // 같은 파일 재업로드 가능하게 리셋
+    e.target.value = "";
+  };
 
   const handleDownloadExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -184,7 +379,7 @@ export default function AttendancePage() {
       const row = [s.name, s.seatNumber || "", ""];
       let total = 0;
       days.forEach((d) => {
-        const times = attendance[s.id]?.[d] || [];
+        const times = attendance[selectedPeriod]?.[s.id]?.[d] || [];
         const range = times[0] && times[1] ? `${times[0]}~${times[1]}` : "";
         row.push(range);
         if (times[0] && times[1]) {
@@ -204,106 +399,14 @@ export default function AttendancePage() {
     );
   };
 
-  const handleUploadExcel = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const deletePeriod = (id) => {
+    if (!window.confirm("이 주차를 삭제하시겠습니까?")) return;
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      const data = evt.target.result;
-      const workbook = XLSX.read(data, { type: "binary" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+    setPeriods(prev => prev.filter(p => p.id !== id));
 
-      const existingStudents = [...students];
-      const updatedAttendance = { ...attendance };
-      const nameToStudent = Object.fromEntries(existingStudents.map(s => [s.name, s]));
-      const importedNames = new Set();
-      const dayIndex = { 월: 3, 화: 4, 수: 5, 목: 6, 금: 7, 토: 8 };
-      const newStudents = [];
-
-      for (let i = 2; i < rows.length; i++) {
-        const row = rows[i];
-        const name = (row[0] || "").trim();
-        const seat = row[1] || "";
-        if (!name) continue;
-
-        importedNames.add(name);
-
-        let student = nameToStudent[name];
-        if (!student) {
-          student = { id: Date.now() + i, name, seatNumber: seat };
-          newStudents.push(student);
-          nameToStudent[name] = student;
-        }
-
-        const id = student.id;
-        updatedAttendance[id] = updatedAttendance[id] || {};
-
-        for (const day of days) {
-          const cell = row[dayIndex[day]];
-          if (typeof cell === "string") {
-            const ranges = cell
-              .split(",")
-              .map(s => s.trim())
-              .filter(s => s.includes("~"))
-              .map(s => {
-                const [start, end] = s.split("~").map(t => t.trim());
-                let endMinutes = timeToMinutes(end);
-                if (endMinutes < 120) endMinutes += 1440;
-                return { start, end, adjustedEndMinutes: endMinutes };
-              });
-
-            if (ranges.length > 0) {
-              ranges.sort((a, b) => b.adjustedEndMinutes - a.adjustedEndMinutes);
-              const { start, end } = ranges[0];
-              // ✅ 정규화해서 저장
-              updatedAttendance[id][day] = normalizeTimeValue([start, end]);
-            } else {
-              // ✅ 빈 값도 정규화
-              updatedAttendance[id][day] = normalizeTimeValue("");
-            }
-          } else {
-            updatedAttendance[id][day] = normalizeTimeValue("");
-          }
-        }
-      }
-
-      // ⚠ 엑셀에 없는 기존 학생 이름들 찾기
-      const missingStudents = existingStudents
-        .filter(s => !importedNames.has(s.name))
-        .map(s => s.name);
-
-      if (missingStudents.length > 0) {
-        alert(`⚠️ 엑셀에 없는 학생:\n${missingStudents.join(", ")}`);
-      }
-
-      // ✅ 엑셀에만 있는 학생 목록 저장 (삭제용)
-      const excelOnlyNames = Array.from(importedNames).filter(
-        name => !existingStudents.find(s => s.name === name)
-      );
-      setExcelOnlyStudentNames(excelOnlyNames);
-
-      // ✅ 학생 목록 병합
-      setStudents([...existingStudents, ...newStudents]);
-
-      // ✅ 출결 병합 + 최종 정규화(모든 요일을 배열 형태로 맞춤)
-      const merged = { ...attendance, ...updatedAttendance };
-      Object.keys(merged).forEach(sid => {
-        days.forEach(d => {
-          merged[sid][d] = normalizeTimeValue(merged[sid][d]);
-        });
-      });
-
-      setAttendance(merged);
-
-      // ✅ 같은 파일 다시 업로드 가능하도록 리셋
-      if (e.target && "value" in e.target) {
-        e.target.value = "";
-      }
-    };
-
-    reader.readAsBinaryString(file);
+    if (selectedPeriod === id) {
+      setSelectedPeriod("");
+    }
   };
 
   return (
@@ -394,7 +497,7 @@ export default function AttendancePage() {
                 />
               </td>
               {days.map(day => {
-                const [start = "", end = ""] = attendance[student.id]?.[day] || [];
+                const [start = "", end = ""] = attendance[selectedPeriod]?.[student.id]?.[day] || [];
                 return (
                   <React.Fragment key={day}>
                     <td className="border px-1">
@@ -437,7 +540,11 @@ export default function AttendancePage() {
         <div className="space-y-1 text-sm">
           {filteredStudents.map(s => (
             <div key={s.id}>
-              <strong>{s.name}</strong>: {formatAttendanceSummary(attendance[s.id])}
+              <strong>{s.name}</strong>: 
+              {formatAttendanceSummary(
+                attendance[selectedPeriod]?.[s.id] || {}
+              )
+            }
             </div>
           ))}
         </div>

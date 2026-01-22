@@ -1,15 +1,25 @@
 // src/App.jsx
 import React, { useState } from "react";
+import { Routes, Route } from "react-router-dom";
 import { ScheduleProvider } from "./context/ScheduleContext";
 
+// 메인 페이지 컴포넌트들
 import WeeklySchedule from "./components/WeeklySchedule";
 import SettingsPage from "./components/SettingsPage";
 import AttendancePage from "./pages/AttendancePage";
 import MentalCarePage from "./pages/MentalCarePage";
 import PlannerCheckPage from "./pages/PlannerCheckPage";
 import MentorAssignmentPage from "./pages/MentorAssignmentPage";
-import ViceDirectorPage from "./pages/ViceDirectorPage"; // ← 폴더명 소문자 pages 로 수정
+import ViceDirectorPage from "./pages/ViceDirectorPage";
+import CurrentStudentMentorPage from "./pages/CurrentStudentMentorPage";
+import DirectorConsultingPage from "./pages/DirectorConsultingPage";
 
+// 🔥 인쇄 편집 페이지 (주차 삭제 버튼 있는 페이지)
+import EditablePrintPage from "./pages/EditablePrintPage";
+
+/* =========================
+   기존 버튼 기반 메인 화면
+========================= */
 function InnerApp() {
   const [plannerText, setPlannerText] = useState(
     "월,수,금: 이민섭M / 화, 목: 임현지M / 부원장님: 김영편입 교수"
@@ -21,20 +31,20 @@ function InnerApp() {
   ]);
   const [page, setPage] = useState(1);
 
-  // 버튼 이름
   const pageNames = [
     "인쇄페이지",
     "멘토정보란",
     "학생출결표",
-    "멘탈케어링",
     "플래너체크",
-    "멘토배정AI",
+    "신입생 멘토배정AI",
+    "재학생 멘토배정AI",
     "월간인터뷰",
+    "원장컨설팅",
   ];
 
   return (
     <div className="p-4">
-      {/* 네비게이션 버튼 */}
+      {/* 상단 네비 버튼 */}
       <div className="mb-4">
         {pageNames.map((name, idx) => (
           <button
@@ -49,7 +59,7 @@ function InnerApp() {
         ))}
       </div>
 
-      {/* 페이지별 렌더링 */}
+      {/* 페이지별 렌더 */}
       {page === 1 && (
         <WeeklySchedule plannerText={plannerText} notices={notices} />
       )}
@@ -62,19 +72,28 @@ function InnerApp() {
         />
       )}
       {page === 3 && <AttendancePage />}
-      {page === 4 && <MentalCarePage />}
-      {page === 5 && <PlannerCheckPage />}
-      {page === 6 && <MentorAssignmentPage />}
+      {page === 4 && <PlannerCheckPage />}
+      {page === 5 && <MentorAssignmentPage />}
+      {page === 6 && <CurrentStudentMentorPage />}
       {page === 7 && <ViceDirectorPage />}
+      {page === 8 && <DirectorConsultingPage />}
     </div>
   );
 }
 
+/* =========================
+   최상위 App (라우터 연결)
+========================= */
 export default function App() {
   return (
     <ScheduleProvider>
-      {/* main.jsx 에서 이미 <HashRouter>로 감싸고 있으므로 여기서는 그대로 렌더만 */}
-      <InnerApp />
+      <Routes>
+        {/* 메인 화면 */}
+        <Route path="/" element={<InnerApp />} />
+
+        {/* 🔥 인쇄 편집 페이지 (주차 삭제 버튼 여기 있음) */}
+        <Route path="/print-edit" element={<EditablePrintPage />} />
+      </Routes>
     </ScheduleProvider>
   );
 }

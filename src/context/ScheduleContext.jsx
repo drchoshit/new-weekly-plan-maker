@@ -1,8 +1,9 @@
+// src/context/ScheduleContext.jsx
 import React, { createContext, useContext, useState, useEffect } from "react";
 
 export const ScheduleContext = createContext();
 
-// ✅ 추가: 요일 상수 (정규화에 사용)
+// ✅ 요일 상수 (월~토)
 const days = ["월", "화", "수", "목", "금", "토"];
 
 export const ScheduleProvider = ({ children }) => {
@@ -15,18 +16,98 @@ export const ScheduleProvider = ({ children }) => {
     }
   });
 
+  // ================================
+  // 🔥 STEP 1: students 구조 자동 확장 (Migration)
+  // ================================
+  useEffect(() => {
+    setStudents(prev =>
+      prev.map(s => ({
+        ...s,
+
+        // ✅ 신입생 플래그 통합 (이 줄 추가)
+       isNewStudent: s.isNewStudent ?? s.isNewbie ?? false,
+        
+        // 🔹 과목 선택 (없으면 기본값)
+        subjects: s.subjects ?? {
+          kor: false,
+          math: false,
+          sci1: false,
+          sci2: false,
+        },
+
+        // 🔹 성격 / 출생년도
+        personality: s.personality ?? "",
+        birthYear: s.birthYear ?? "",
+
+        // 🔒 최초 배정 멘토 (신입생 첫 확정값 박제)
+        initialMentor: s.initialMentor
+          ? {
+              mentor: s.initialMentor.mentor || s.initialMentor.mentorId || "",
+              day: s.initialMentor.day || "",
+              periodId: s.initialMentor.periodId || "initial",
+              createdAt: s.initialMentor.createdAt || Date.now(),
+            }
+          : {
+              mentor: "",
+              day: "",
+              periodId: "initial",
+              createdAt: Date.now(),
+            },
+
+
+        // 🔄 주차별 멘토 히스토리 (공식)
+        // mentorHistory[periodId] = {
+        //   mentorId: "hong-B", // 🔥 mentorId 기준
+        //   day: "수",
+        //   source: "newbie" | "auto",
+        //   autoRank: 1,
+        //   fromDay: "수",
+        //   toDay: "화",
+        //   dayDiff: -1,
+        //   attended: true,        // 실제 진행 여부
+        //   missedCarryOver: false // 이월 누락 여부
+        // }
+        mentorHistory: s.mentorHistory ?? {},
+
+        // 🧠 자동 배정 임시 결과 (재학생 페이지에서만 사용, 확정 시 삭제)
+        weeklyMentorDraft: s.weeklyMentorDraft ?? undefined,
+        weeklyMentorInfo: s.weeklyMentorInfo ?? undefined,
+      }))
+    );
+    // ⚠️ 최초 1회만 실행
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [mentorsByDay, setMentorsByDay] = useState(() => {
     try {
       const saved = localStorage.getItem("mentorsByDay");
+      return saved
+        ? JSON.parse(saved)
+        : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+    } catch {
+      return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+    }
+  });
+
+  // 🔥 [신규] 플래너 체크 결과 (읽기 전용 공유용)
+  const [plannerScheduleByDay, setPlannerScheduleByDay] = useState(() => {
+    try {
+      const saved = localStorage.getItem("plannerScheduleByDay");
       return saved ? JSON.parse(saved) : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
     } catch {
       return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
     }
   });
 
-  const [plannerMessage, setPlannerMessage] = useState(() => localStorage.getItem("plannerMessage") || "");
-  const [noticeMessage, setNoticeMessage] = useState(() => localStorage.getItem("noticeMessage") || "");
-  const [monthlyNotice, setMonthlyNotice] = useState(() => localStorage.getItem("monthlyNotice") || "");
+  const [plannerMessage, setPlannerMessage] = useState(
+    () => localStorage.getItem("plannerMessage") || ""
+  );
+  const [noticeMessage, setNoticeMessage] = useState(
+    () => localStorage.getItem("noticeMessage") || ""
+  );
+  const [monthlyNotice, setMonthlyNotice] = useState(
+    () => localStorage.getItem("monthlyNotice") || ""
+  );
 
   const defaultMentalCare = {
     mentorTime: { 월: {}, 화: {}, 수: {}, 목: {}, 금: {}, 토: {} },
@@ -78,30 +159,98 @@ export const ScheduleProvider = ({ children }) => {
     }
   });
 
-  // ✅ 추가: 시작일 & 종료일 (엑셀 다운로드용)
-  const [startDate, setStartDate] = useState(() => localStorage.getItem("startDate") || "");
-  const [endDate, setEndDate] = useState(() => localStorage.getItem("endDate") || "");
+  // ✅ 주간 범위
+  const [startDate, setStartDate] = useState(
+    () => localStorage.getItem("startDate") || ""
+  );
+  const [endDate, setEndDate] = useState(
+    () => localStorage.getItem("endDate") || ""
+  );
 
-  // ✅ 학생 리스트 변경 시 기본 출결 정보 추가 (기존 출결 유지)
+  // 🔥 [신규] 공식 주차 목록
+  const [periods, setPeriods] = useState(() => {
+    try {
+      const saved = localStorage.getItem("periods");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // 🔥 [신규] 현재 선택된 주차
+  const [selectedPeriod, setSelectedPeriod] = useState(() => {
+    return localStorage.getItem("selectedPeriod") || "";
+  });
+  
+  // 🔥 [신규] 자동배정 기준 주차 (확정된 주)
+  const [currentPeriodId, setCurrentPeriodId] = useState(() => {
+    return localStorage.getItem("currentPeriodId") || "";
+  });
+
+  // 🔥 selectedPeriod → currentPeriodId 동기화 (핵심)
   useEffect(() => {
-    setAttendance((prev) => {
-      const updated = { ...prev };
-      students.forEach((s) => {
-        if (!updated[s.id]) {
-          updated[s.id] = { 월: "", 화: "", 수: "", 목: "", 금: "", 토: "" };
+    if (selectedPeriod && selectedPeriod !== currentPeriodId) {
+      setCurrentPeriodId(selectedPeriod);
+    }
+  }, [selectedPeriod]);
+
+  /* =================================================
+     🔥 학생별 주간 캘린더 (외부 업로드용)
+  ================================================= */
+  const [weeklyCalendars, setWeeklyCalendars] = useState(() => {
+    try {
+      const saved = localStorage.getItem("weeklyCalendars");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  /* =================================================
+     🔥 원장 컨설팅 데이터
+  ================================================= */
+  const [studentConsultings, setStudentConsultings] = useState(() => {
+    try {
+      const saved = localStorage.getItem("studentConsultings");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // ===== 학생 추가 시 출결 기본값 (주차 기준) =====
+  // 🔥 출결은 "자동배정 기준 주차" 기준으로 생성
+  useEffect(() => {
+    if (!currentPeriodId) return;
+
+    setAttendance(prev => {
+      const next = { ...prev };
+
+      if (!next[currentPeriodId]) {
+        next[currentPeriodId] = {};
+      }
+
+      students.forEach(s => {
+        if (!next[currentPeriodId][s.id]) {
+          next[currentPeriodId][s.id] = {
+            월: [],
+            화: [],
+            수: [],
+            목: [],
+            금: [],
+            토: [],
+          };
         }
       });
-      return updated;
-    });
-  }, [students]);
 
-  // ====== ⬇⬇⬇ 추가: 엑셀 업로드 후 입력 잠김 방지(모양 정규화) ⬇⬇⬇ ======
-  // 모든 출결 값을 항상 배열 형태([start, end]) 또는 []로 정규화
+      return next;
+    });
+  }, [students, currentPeriodId]);
+
+  // ===== 출결 정규화 =====
   function normalizeTimeValue(value) {
-    // 허용 형태: [], ["HH:MM","HH:MM"], "HH:MM~HH:MM", "", undefined
     if (Array.isArray(value)) {
       const a = value.map((v) => (typeof v === "string" ? v.trim() : ""));
-      // 길이를 2로 맞추되, 완전 공백이면 [] 유지
       if (!a[0] && !a[1]) return [];
       return [a[0] || "", a[1] || ""];
     }
@@ -113,7 +262,6 @@ export const ScheduleProvider = ({ children }) => {
         if (!st && !en) return [];
         return [st || "", en || ""];
       }
-      // 단일 "HH:MM"만 온 경우 -> 시작만 채워진 상태로 보관
       return [s, ""];
     }
     return [];
@@ -123,7 +271,6 @@ export const ScheduleProvider = ({ children }) => {
     const next = { ...(rawAttendance || {}) };
     let changed = false;
 
-    // 학생별 보정
     list.forEach((s) => {
       if (!next[s.id]) {
         next[s.id] = {};
@@ -133,28 +280,51 @@ export const ScheduleProvider = ({ children }) => {
       days.forEach((d) => {
         const before = per[d];
         const after = normalizeTimeValue(before);
-        const beforeStr = JSON.stringify(before === undefined ? null : before);
-        const afterStr = JSON.stringify(after);
-        if (beforeStr !== afterStr) {
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
           per[d] = after;
           changed = true;
         }
       });
     });
 
-    // 존재하지만 학생 목록에 없는 잔여 키는 그대로 유지(삭제 X)
     return { normalized: next, changed };
   }
 
-  // attendance/students 변동 시 한 번 더 정규화하여 입력 잠김 방지
   useEffect(() => {
-    const { normalized, changed } = normalizeAttendanceShape(attendance, students);
-    if (changed) setAttendance(normalized);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [students, attendance]);
-  // ====== ⬆⬆⬆ 추가 끝 ⬆⬆⬆ ======
+    if (!currentPeriodId) return;
 
-  // 🔁 로컬스토리지 동기화
+    setAttendance(prev => {
+      const periodAtt = prev[currentPeriodId] || {};
+      let changed = false;
+      const nextPeriodAtt = { ...periodAtt };
+
+      students.forEach(s => {
+        if (!nextPeriodAtt[s.id]) {
+          nextPeriodAtt[s.id] = {};
+          changed = true;
+        }
+
+        days.forEach(d => {
+          const before = nextPeriodAtt[s.id][d];
+          const after = normalizeTimeValue(before);
+
+          if (JSON.stringify(before) !== JSON.stringify(after)) {
+            nextPeriodAtt[s.id][d] = after;
+            changed = true;
+          }
+        });
+      });
+
+      if (!changed) return prev;
+
+      return {
+        ...prev,
+        [currentPeriodId]: nextPeriodAtt,
+      };
+    });
+  }, [students, currentPeriodId]);
+
+  // ===== localStorage 동기화 =====
   useEffect(() => {
     localStorage.setItem("students", JSON.stringify(students));
   }, [students]);
@@ -184,6 +354,13 @@ export const ScheduleProvider = ({ children }) => {
   }, [scheduleByDay]);
 
   useEffect(() => {
+    localStorage.setItem(
+      "plannerScheduleByDay",
+      JSON.stringify(plannerScheduleByDay)
+    );
+  }, [plannerScheduleByDay]);
+
+  useEffect(() => {
     localStorage.setItem("attendance", JSON.stringify(attendance));
   }, [attendance]);
 
@@ -192,10 +369,12 @@ export const ScheduleProvider = ({ children }) => {
   }, [assignments]);
 
   useEffect(() => {
-    localStorage.setItem("studentInterviewAssignments", JSON.stringify(studentInterviewAssignments));
+    localStorage.setItem(
+      "studentInterviewAssignments",
+      JSON.stringify(studentInterviewAssignments)
+    );
   }, [studentInterviewAssignments]);
 
-  // ✅ 추가: 날짜 정보 동기화
   useEffect(() => {
     localStorage.setItem("startDate", startDate);
   }, [startDate]);
@@ -204,7 +383,30 @@ export const ScheduleProvider = ({ children }) => {
     localStorage.setItem("endDate", endDate);
   }, [endDate]);
 
-  // ✅ 전체 상태를 한 번에 반환하는 getter
+  useEffect(() => {
+    localStorage.setItem("periods", JSON.stringify(periods));
+  }, [periods]);
+
+  useEffect(() => {
+    localStorage.setItem("selectedPeriod", selectedPeriod);
+  }, [selectedPeriod]);
+
+  useEffect(() => {
+    localStorage.setItem("currentPeriodId", currentPeriodId);
+  }, [currentPeriodId]);
+
+  useEffect(() => {
+    localStorage.setItem("weeklyCalendars", JSON.stringify(weeklyCalendars));
+  }, [weeklyCalendars]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "studentConsultings",
+      JSON.stringify(studentConsultings)
+    );
+  }, [studentConsultings]);
+
+  // ===== 전체 백업 =====
   const getAllState = () => ({
     students,
     mentorsByDay,
@@ -213,14 +415,19 @@ export const ScheduleProvider = ({ children }) => {
     monthlyNotice,
     mentalCareSettings,
     scheduleByDay,
+
+    // 🔥 플래너 체크 결과
+    plannerScheduleByDay,
+
     attendance,
     assignments,
     studentInterviewAssignments,
     startDate,
-    endDate
+    endDate,
+    weeklyCalendars,
+    studentConsultings,
   });
 
-  // ✅ 전체 상태를 한 번에 덮어쓰는 setter
   const setAllState = (data) => {
     if (data.students) setStudents(data.students);
     if (data.mentorsByDay) setMentorsByDay(data.mentorsByDay);
@@ -229,45 +436,17 @@ export const ScheduleProvider = ({ children }) => {
     if (typeof data.monthlyNotice === "string") setMonthlyNotice(data.monthlyNotice);
     if (data.mentalCareSettings) setMentalCareSettings(data.mentalCareSettings);
     if (data.scheduleByDay) setScheduleByDay(data.scheduleByDay);
+    if (data.plannerScheduleByDay)
+      setPlannerScheduleByDay(data.plannerScheduleByDay);
     if (data.attendance) setAttendance(data.attendance);
     if (data.assignments) setAssignments(data.assignments);
-    if (data.studentInterviewAssignments) {
-      setStudentInterviewAssignments(prev => ({
-        ...prev,
-        ...data.studentInterviewAssignments
-      }));
-    }
+    if (data.studentInterviewAssignments)
+      setStudentInterviewAssignments(data.studentInterviewAssignments);
     if (data.startDate) setStartDate(data.startDate);
     if (data.endDate) setEndDate(data.endDate);
+    if (data.weeklyCalendars) setWeeklyCalendars(data.weeklyCalendars);
+    if (data.studentConsultings) setStudentConsultings(data.studentConsultings);
   };
-
-  // ====== ⬇⬇⬇ 추가: 엑셀 업로드용 안전 setter/병합기 ⬇⬇⬇ ======
-  // 사용처: AttendancePage에서 엑셀 파싱 뒤 setAttendanceNormalized(...)로 넣으면 바로 정규화됨
-  const setAttendanceNormalized = (nextOrUpdater) => {
-    setAttendance((prev) => {
-      const draft = typeof nextOrUpdater === "function" ? nextOrUpdater(prev) : nextOrUpdater;
-      const { normalized } = normalizeAttendanceShape(draft, students);
-      return normalized;
-    });
-  };
-
-  // 사용처: AttendancePage에서 기존 데이터에 "병합"하고 싶을 때
-  const mergeAttendanceFromExcel = (incoming) => {
-    setAttendance((prev) => {
-      const base = { ...prev };
-      Object.entries(incoming || {}).forEach(([sid, perDay]) => {
-        if (!base[sid]) base[sid] = {};
-        days.forEach((d) => {
-          if (perDay && perDay[d] !== undefined) {
-            base[sid][d] = normalizeTimeValue(perDay[d]);
-          }
-        });
-      });
-      const { normalized } = normalizeAttendanceShape(base, students);
-      return normalized;
-    });
-  };
-  // ====== ⬆⬆⬆ 추가 끝 ⬆⬆⬆ ======
 
   return (
     <ScheduleContext.Provider
@@ -279,15 +458,24 @@ export const ScheduleProvider = ({ children }) => {
         monthlyNotice, setMonthlyNotice,
         mentalCareSettings, setMentalCareSettings,
         scheduleByDay, setScheduleByDay,
+        // 🔥 플래너 체크 결과 공유용
+        plannerScheduleByDay, setPlannerScheduleByDay,
         attendance, setAttendance,
         assignments, setAssignments,
         studentInterviewAssignments, setStudentInterviewAssignments,
         startDate, setStartDate,
         endDate, setEndDate,
+        periods, setPeriods,
+        selectedPeriod, setSelectedPeriod,
+
+        // 🔥 자동배정 기준 주차
+        currentPeriodId, setCurrentPeriodId,
+
+        // 🔥 캘린더 & 컨설팅
+        weeklyCalendars, setWeeklyCalendars,
+        studentConsultings, setStudentConsultings,
+
         getAllState, setAllState,
-        // ✅ 추가로 공개: 정규화/병합 유틸
-        setAttendanceNormalized,
-        mergeAttendanceFromExcel,
       }}
     >
       {children}
