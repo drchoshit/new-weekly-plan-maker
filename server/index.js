@@ -5,7 +5,7 @@ const bcrypt = require("bcryptjs");
 const cors = require("cors");
 const express = require("express");
 const jwt = require("jsonwebtoken");
-const { query } = require("./db");
+const { readState, writeState, DATA_PATH } = require("./storage");
 
 const app = express();
 
@@ -68,24 +68,19 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.get("/api/state", requireAuth, async (_req, res) => {
-  const result = await query("SELECT state FROM app_state WHERE id = 1");
-  if (result.rows.length === 0) {
-    return res.json({ state: null });
-  }
-  return res.json({ state: result.rows[0].state });
+  const state = await readState();
+  return res.json({ state: state ?? null });
 });
 
 app.put("/api/state", requireAuth, async (req, res) => {
   const { state } = req.body || {};
 
-  await query(
-    "INSERT INTO app_state (id, state) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()",
-    [state ?? {}]
-  );
+  await writeState(state ?? {});
 
   return res.json({ ok: true });
 });
 
 app.listen(PORT, () => {
   console.log(`API server listening on port ${PORT}`);
+  console.log(`Using data file at ${DATA_PATH}`);
 });

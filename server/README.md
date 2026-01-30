@@ -1,12 +1,13 @@
 # Backend API (Render)
 
 ## Overview
-This API stores a single shared app state in PostgreSQL and provides a login endpoint for a single admin account.
+This API stores a single shared app state in a JSON file on a Render Disk and provides a login endpoint for a single admin account.
 
 ## Setup
-1. Create a Render PostgreSQL instance.
-2. Run `server/schema.sql` to initialize the `app_state` table.
+1. Create a Render Web Service for `server/index.js`.
+2. Attach a Render Disk and set its mount path (example: `/var/data`).
 3. Configure the environment variables listed in `server/.env.example`.
+4. Set `DATA_PATH` to the file on the mounted disk (example: `/var/data/app_state.json`).
 
 ## Password hash
 Generate the bcrypt hash locally and store the hash in `AUTH_PASSWORD_HASH`. The API supports
