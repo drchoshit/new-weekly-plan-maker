@@ -1,12 +1,15 @@
 // src/context/ScheduleContext.jsx
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import { getAppState, saveAppState } from "../api/client";
 
 export const ScheduleContext = createContext();
 
 // ✅ 요일 상수 (월~토)
 const days = ["월", "화", "수", "목", "금", "토"];
 
-export const ScheduleProvider = ({ children }) => {
+export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
+  const hasHydratedRef = useRef(false);
+  const saveTimeoutRef = useRef();
   const [students, setStudents] = useState(() => {
     try {
       const saved = localStorage.getItem("students");
@@ -424,29 +427,126 @@ export const ScheduleProvider = ({ children }) => {
     studentInterviewAssignments,
     startDate,
     endDate,
+    periods,
+    selectedPeriod,
+    currentPeriodId,
     weeklyCalendars,
     studentConsultings,
   });
 
   const setAllState = (data) => {
-    if (data.students) setStudents(data.students);
-    if (data.mentorsByDay) setMentorsByDay(data.mentorsByDay);
-    if (typeof data.plannerMessage === "string") setPlannerMessage(data.plannerMessage);
-    if (typeof data.noticeMessage === "string") setNoticeMessage(data.noticeMessage);
-    if (typeof data.monthlyNotice === "string") setMonthlyNotice(data.monthlyNotice);
-    if (data.mentalCareSettings) setMentalCareSettings(data.mentalCareSettings);
-    if (data.scheduleByDay) setScheduleByDay(data.scheduleByDay);
-    if (data.plannerScheduleByDay)
-      setPlannerScheduleByDay(data.plannerScheduleByDay);
-    if (data.attendance) setAttendance(data.attendance);
-    if (data.assignments) setAssignments(data.assignments);
-    if (data.studentInterviewAssignments)
-      setStudentInterviewAssignments(data.studentInterviewAssignments);
-    if (data.startDate) setStartDate(data.startDate);
-    if (data.endDate) setEndDate(data.endDate);
-    if (data.weeklyCalendars) setWeeklyCalendars(data.weeklyCalendars);
-    if (data.studentConsultings) setStudentConsultings(data.studentConsultings);
+    if (!data) {
+      return;
+    }
+
+    if ("students" in data) setStudents(data.students ?? []);
+    if ("mentorsByDay" in data)
+      setMentorsByDay(
+        data.mentorsByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
+      );
+    if ("plannerMessage" in data) setPlannerMessage(data.plannerMessage ?? "");
+    if ("noticeMessage" in data) setNoticeMessage(data.noticeMessage ?? "");
+    if ("monthlyNotice" in data) setMonthlyNotice(data.monthlyNotice ?? "");
+    if ("mentalCareSettings" in data)
+      setMentalCareSettings(
+        data.mentalCareSettings ?? {
+          mentorTime: { 월: {}, 화: {}, 수: {}, 목: {}, 금: {}, 토: {} },
+          sessionDuration: 15,
+        }
+      );
+    if ("scheduleByDay" in data)
+      setScheduleByDay(data.scheduleByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] });
+    if ("plannerScheduleByDay" in data)
+      setPlannerScheduleByDay(
+        data.plannerScheduleByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
+      );
+    if ("attendance" in data) setAttendance(data.attendance ?? {});
+    if ("assignments" in data) setAssignments(data.assignments ?? []);
+    if ("studentInterviewAssignments" in data)
+      setStudentInterviewAssignments(data.studentInterviewAssignments ?? {});
+    if ("startDate" in data) setStartDate(data.startDate ?? "");
+    if ("endDate" in data) setEndDate(data.endDate ?? "");
+    if ("periods" in data) setPeriods(data.periods ?? []);
+    if ("selectedPeriod" in data) setSelectedPeriod(data.selectedPeriod ?? "");
+    if ("currentPeriodId" in data) setCurrentPeriodId(data.currentPeriodId ?? "");
+    if ("weeklyCalendars" in data) setWeeklyCalendars(data.weeklyCalendars ?? {});
+    if ("studentConsultings" in data) setStudentConsultings(data.studentConsultings ?? {});
   };
+
+  useEffect(() => {
+    if (!authToken) {
+      hasHydratedRef.current = false;
+      return;
+    }
+
+    let isActive = true;
+
+    const loadFromServer = async () => {
+      try {
+        const response = await getAppState(authToken);
+        if (!isActive) {
+          return;
+        }
+        setAllState(response?.state);
+        hasHydratedRef.current = true;
+      } catch (error) {
+        if (error?.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
+      }
+    };
+
+    loadFromServer();
+
+    return () => {
+      isActive = false;
+    };
+  }, [authToken, onUnauthorized]);
+
+  useEffect(() => {
+    if (!authToken || !hasHydratedRef.current) {
+      return;
+    }
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    saveTimeoutRef.current = setTimeout(() => {
+      saveAppState(authToken, getAllState()).catch(error => {
+        if (error?.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
+      });
+    }, 800);
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [
+    authToken,
+    students,
+    mentorsByDay,
+    plannerMessage,
+    noticeMessage,
+    monthlyNotice,
+    mentalCareSettings,
+    scheduleByDay,
+    plannerScheduleByDay,
+    attendance,
+    assignments,
+    studentInterviewAssignments,
+    startDate,
+    endDate,
+    periods,
+    selectedPeriod,
+    currentPeriodId,
+    weeklyCalendars,
+    studentConsultings,
+    onUnauthorized,
+  ]);
 
   return (
     <ScheduleContext.Provider

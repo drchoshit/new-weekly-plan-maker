@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { Routes, Route } from "react-router-dom";
 import { ScheduleProvider } from "./context/ScheduleContext";
+import LoginPage from "./pages/LoginPage";
 
 // 메인 페이지 컴포넌트들
 import WeeklySchedule from "./components/WeeklySchedule";
@@ -85,15 +86,33 @@ function InnerApp() {
    최상위 App (라우터 연결)
 ========================= */
 export default function App() {
-  return (
-    <ScheduleProvider>
-      <Routes>
-        {/* 메인 화면 */}
-        <Route path="/" element={<InnerApp />} />
+  const [authToken, setAuthToken] = useState(() =>
+    localStorage.getItem("authToken")
+  );
 
-        {/* 🔥 인쇄 편집 페이지 (주차 삭제 버튼 여기 있음) */}
-        <Route path="/print-edit" element={<EditablePrintPage />} />
-      </Routes>
+  const handleLoginSuccess = token => {
+    localStorage.setItem("authToken", token);
+    setAuthToken(token);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("authToken");
+    setAuthToken(null);
+  };
+
+  return (
+    <ScheduleProvider authToken={authToken} onUnauthorized={handleLogout}>
+      {authToken ? (
+        <Routes>
+          {/* 메인 화면 */}
+          <Route path="/" element={<InnerApp />} />
+
+          {/* 🔥 인쇄 편집 페이지 (주차 삭제 버튼 여기 있음) */}
+          <Route path="/print-edit" element={<EditablePrintPage />} />
+        </Routes>
+      ) : (
+        <LoginPage onLoginSuccess={handleLoginSuccess} />
+      )}
     </ScheduleProvider>
   );
 }
