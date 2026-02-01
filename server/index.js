@@ -80,6 +80,19 @@ app.put("/api/state", requireAuth, async (req, res) => {
   return res.json({ ok: true });
 });
 
+app.put("/api/state/weekly-calendars", requireAuth, async (req, res) => {
+  const { weeklyCalendars } = req.body || {};
+  const currentState = (await readState()) ?? {};
+  const nextState = {
+    ...currentState,
+    weeklyCalendars: weeklyCalendars ?? {},
+  };
+
+  await writeState(nextState);
+
+  return res.json({ ok: true });
+});
+
 app.listen(PORT, () => {
   console.log(`API server listening on port ${PORT}`);
   console.log(`Using data file at ${DATA_PATH}`);

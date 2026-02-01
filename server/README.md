@@ -22,3 +22,4 @@ node -e "const bcrypt=require('bcryptjs'); bcrypt.hash('your-password', 10).then
 - `POST /api/login` -> `{ token }`
 - `GET /api/state` -> `{ state }`
 - `PUT /api/state` -> `{ ok: true }`
+- `PUT /api/state/weekly-calendars` -> `{ ok: true }`

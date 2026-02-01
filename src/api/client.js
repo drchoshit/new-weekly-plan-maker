@@ -42,3 +42,16 @@ export const saveAppState = async (token, state) => {
 
   return handleResponse(response);
 };
+
+export const saveWeeklyCalendars = async (token, weeklyCalendars) => {
+  const response = await fetch(buildUrl("/api/state/weekly-calendars"), {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ weeklyCalendars }),
+  });
+
+  return handleResponse(response);
+};

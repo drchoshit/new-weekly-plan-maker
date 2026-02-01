@@ -1,56 +1,151 @@
-// src/utils/convertMedicalScheduleJson.js
+﻿// src/utils/convertMedicalScheduleJson.js
 
 export default function convertMedicalScheduleJson(json) {
   const result = {};
+  if (!json) return result;
 
-  // 1️⃣ schedules 배열 기준으로 처리 (중요)
-  const schedules = json.schedules || [];
+  const schedules = Array.isArray(json.schedules) ? json.schedules : [];
+  if (!schedules.length) return result;
 
-  schedules.forEach(sc => {
-    const weekStart = sc.week_start; // 예: 2026-01-12
-    if (!weekStart) return;
+  const students = Array.isArray(json.students) ? json.students : [];
+  const idToName = new Map();
 
-    // weekKey 생성 (토요일까지 자동 계산)
-    const start = new Date(weekStart);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 5);
+  students.forEach(s => {
+    if (!s) return;
+    const id = s.id != null ? String(s.id) : "";
+    const name = s.name != null ? String(s.name) : "";
+    if (id && name) {
+      idToName.set(id, name);
+    }
+  });
 
-    const fmt = d =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`;
+  const metaWeekStart =
+    json?.meta?.weekStartYmd ||
+    json?.meta?.weekStart ||
+    json?.weekStartYmd ||
+    json?.week_start ||
+    "";
+  const metaWeekRangeText = json?.meta?.weekRangeText || json?.weekRangeText || "";
 
-    const weekKey = `${fmt(start)}~${fmt(end)}`;
+  const fmt = d =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
 
-    // weekKey 초기화
+  const normalizeRangeKey = text => {
+    if (!text || typeof text !== "string") return null;
+    const key = text.replace(/\s/g, "");
+    return key || null;
+  };
+
+  const toDate = value => {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  const parseWeekRangeEnd = (start, rangeText) => {
+    if (!start || !rangeText || typeof rangeText !== "string") return null;
+    const parts = rangeText.split("~").map(p => p.trim());
+    if (parts.length !== 2) return null;
+
+    const [mStr, dStr] = parts[1].split("/");
+    const m = Number(mStr);
+    const d = Number(dStr);
+    if (!m || !d) return null;
+
+    const end = new Date(start.getFullYear(), m - 1, d);
+    if (Number.isNaN(end.getTime())) return null;
+    if (end < start) {
+      end.setFullYear(end.getFullYear() + 1);
+    }
+    return end;
+  };
+
+  const buildWeekKey = (weekStart, rangeText) => {
+    const start = toDate(weekStart);
+    if (!start) return null;
+
+    const endFromRange = parseWeekRangeEnd(start, rangeText);
+    const end = endFromRange ?? new Date(start);
+
+    if (!endFromRange) {
+      // Legacy default (Mon~Sat) when no explicit range provided.
+      end.setDate(start.getDate() + 5);
+    }
+
+    return `${fmt(start)}~${fmt(end)}`;
+  };
+
+  const metaRangeKey = normalizeRangeKey(metaWeekRangeText);
+  const metaWeekKey = metaRangeKey || buildWeekKey(metaWeekStart, metaWeekRangeText);
+
+  const ensureStudentBucket = (weekKey, studentKey) => {
     if (!result[weekKey]) {
       result[weekKey] = {};
     }
-
-    const studentName = sc.name;
-    if (!studentName) return;
-
-    // 학생 초기화
-    if (!result[weekKey][studentName]) {
-      result[weekKey][studentName] = {
+    if (!result[weekKey][studentKey]) {
+      result[weekKey][studentKey] = {
         월: [],
         화: [],
         수: [],
         목: [],
         금: [],
         토: [],
-        일: []
+        일: [],
       };
     }
+  };
 
-    // 요일별 일정 추가
-    if (result[weekKey][studentName][sc.day]) {
-      const text =
-        sc.description && sc.description.trim()
-          ? `${sc.start}~${sc.end} (${sc.description})`
-          : `${sc.start}~${sc.end}`;
+  const buildItemText = (start, end, type, description) => {
+    const timeText = start && end ? `${start}~${end}` : start || end || "";
+    const detail = [type, description]
+      .filter(v => v && String(v).trim())
+      .join(": ")
+      .trim();
 
-      result[weekKey][studentName][sc.day].push(text);
+    if (!detail) {
+      return timeText;
+    }
+
+    return `${timeText} (${detail})`;
+  };
+
+  schedules.forEach(sc => {
+    if (!sc) return;
+
+    const rangeKey = normalizeRangeKey(
+      sc.week_range_text || sc.weekRangeText || metaWeekRangeText
+    );
+    const isoKey = buildWeekKey(
+      sc.week_start || sc.weekStart || metaWeekStart,
+      sc.week_range_text || sc.weekRangeText || metaWeekRangeText
+    );
+    const weekKey = rangeKey || isoKey || metaWeekKey;
+    if (!weekKey) return;
+
+    const studentIdRaw =
+      sc.student_id ?? sc.studentId ?? sc.studentID ?? sc.id ?? "";
+    const studentId = studentIdRaw !== "" ? String(studentIdRaw) : "";
+    const studentName =
+      sc.name ||
+      sc.student_name ||
+      sc.studentName ||
+      (studentId && idToName.get(studentId)) ||
+      "";
+
+    const studentKey = studentId || studentName;
+    if (!studentKey) return;
+
+    ensureStudentBucket(weekKey, studentKey);
+
+    const day = sc.day;
+    if (!day || !result[weekKey][studentKey][day]) return;
+
+    const text = buildItemText(sc.start, sc.end, sc.type, sc.description);
+
+    if (text) {
+      result[weekKey][studentKey][day].push(text);
     }
   });
 

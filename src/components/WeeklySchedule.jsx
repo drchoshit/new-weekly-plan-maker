@@ -40,6 +40,7 @@ export default function WeeklySchedule({
     getAllState, setAllState,
 
     weeklyCalendars, setWeeklyCalendars,
+    saveWeeklyCalendarsOnly,
 
     // ✅ 날짜/주차
     startDate, setStartDate,
@@ -189,8 +190,12 @@ export default function WeeklySchedule({
         // 🔥 여기서 변환
         const converted = convertMedicalScheduleJson(json);
 
-        setWeeklyCalendars(converted);
-        localStorage.setItem('weeklyCalendars', JSON.stringify(converted));
+        if (saveWeeklyCalendarsOnly) {
+          saveWeeklyCalendarsOnly(converted);
+        } else {
+          setWeeklyCalendars(converted);
+          localStorage.setItem('weeklyCalendars', JSON.stringify(converted));
+        }
 
         console.log('📅 변환된 주간 캘린더', converted);
         alert('✅ 학생 주간 캘린더 업로드 완료');

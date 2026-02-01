@@ -1,6 +1,6 @@
 // src/context/ScheduleContext.jsx
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { getAppState, saveAppState } from "../api/client";
+import { getAppState, saveAppState, saveWeeklyCalendars } from "../api/client";
 
 export const ScheduleContext = createContext();
 
@@ -10,6 +10,7 @@ const days = ["월", "화", "수", "목", "금", "토"];
 export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const hasHydratedRef = useRef(false);
   const saveTimeoutRef = useRef();
+  const skipNextFullSaveRef = useRef(false);
   const [students, setStudents] = useState(() => {
     try {
       const saved = localStorage.getItem("students");
@@ -473,6 +474,28 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     if ("studentConsultings" in data) setStudentConsultings(data.studentConsultings ?? {});
   };
 
+  const saveWeeklyCalendarsOnly = async (nextWeeklyCalendars) => {
+    const hasAuth = Boolean(authToken);
+    const shouldSkipFullSave = Boolean(authToken && hasHydratedRef.current);
+    if (shouldSkipFullSave) {
+      skipNextFullSaveRef.current = true;
+    }
+
+    setWeeklyCalendars(nextWeeklyCalendars ?? {});
+
+    if (!hasAuth) {
+      return;
+    }
+
+    try {
+      await saveWeeklyCalendars(authToken, nextWeeklyCalendars ?? {});
+    } catch (error) {
+      if (error?.status === 401 && onUnauthorized) {
+        onUnauthorized();
+      }
+    }
+  };
+
   useEffect(() => {
     if (!authToken) {
       hasHydratedRef.current = false;
@@ -510,6 +533,11 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
+    }
+
+    if (skipNextFullSaveRef.current) {
+      skipNextFullSaveRef.current = false;
+      return;
     }
 
     saveTimeoutRef.current = setTimeout(() => {
@@ -576,6 +604,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         studentConsultings, setStudentConsultings,
 
         getAllState, setAllState,
+        saveWeeklyCalendarsOnly,
       }}
     >
       {children}
