@@ -33,6 +33,7 @@ export default function WeeklySchedule({
   const {
     students, setStudents,
     mentorsByDay,
+    plannerScheduleByDay,
     plannerMessage, setPlannerMessage,
     noticeMessage, setNoticeMessage,
     monthlyNotice, setMonthlyNotice,
@@ -155,9 +156,21 @@ export default function WeeklySchedule({
   // ===============================
   // 🔥 로컬 스케줄 캐시 (인쇄 전용)
   // ===============================
-  const planSchedule = JSON.parse(
-    localStorage.getItem('plannerSchedule') || '{}'
-  );
+  const planSchedule = React.useMemo(() => {
+    const hasByDayData = days.some(
+      (day) =>
+        Array.isArray(plannerScheduleByDay?.[day]) &&
+        plannerScheduleByDay[day].length > 0
+    );
+
+    if (hasByDayData) return plannerScheduleByDay;
+
+    try {
+      return JSON.parse(localStorage.getItem('plannerSchedule') || '{}');
+    } catch {
+      return {};
+    }
+  }, [plannerScheduleByDay]);
 
   const careSchedule = JSON.parse(
     localStorage.getItem('mentalCareSchedule') || '{}'
@@ -403,9 +416,16 @@ export default function WeeklySchedule({
 
     // 기본(자동배정) 플래너 시간: 하루에 1개만 표시
     const plannerTimesArr = days.map((day) => {
-      const rec = (planSchedule[day] || []).find(
-        x => String(x.studentId) === String(student.id)
-      );
+      const rec = (planSchedule[day] || []).find((x) => {
+        if (!x) return false;
+        if (x.studentId !== undefined && x.studentId !== null) {
+          return String(x.studentId) === String(student.id);
+        }
+        if (x.student) {
+          return String(x.student) === String(student.name);
+        }
+        return false;
+      });
       return rec ? `${rec.start}~${rec.end}` : 'X';
     });
 
