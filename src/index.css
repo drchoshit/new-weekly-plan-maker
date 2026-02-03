@@ -4,15 +4,16 @@
 
 /* Print & overflow 조정 */
 @media print {
-  /* 📌 인쇄 비율 축소 (하단 잘림 방지용) */
+  /* 📌 인쇄 비율은 JS에서 학생별로 자동 축소 */
   body {
-    zoom: 90%;
+    zoom: 100%;
+    margin: 0;
   }
 
   /* 0) 페이지 크기 및 여백 설정 */
   @page {
-    size: auto;                 /* 기본 용지 크기 */
-    margin: 10mm 10mm 10mm 10mm;/* 상 우 하 좌 여백 모두 10mm */
+    size: A4 landscape;         /* A4 가로 고정 */
+    margin: 0;                  /* 최대한 꽉 채움 */
   }
 
   /* 1) 모든 요소 숨기기 */
@@ -29,18 +30,22 @@
   /* 3) 인쇄 영역 박스 */
   #print-area {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    margin: auto;
+    inset: 0;
+    margin: 0;
     width: auto;
     padding: 0;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   /* 4) 컬러 유지 */
   * {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  #print-area ul {
+    margin: 0;
   }
 
   /* 5) overflow 숨김 */
@@ -64,16 +69,80 @@
     padding: 0.5rem !important;
   }
 
-  /* 8) 페이지 분리 없애기 */
-  .break-after-page {
-    page-break-after: auto !important;
-  }
-
-  /* 9) 끊김 방지 */
-  #print-area > div {
+  /* 8) 한 학생 = 한 페이지 */
+  .print-page {
+    --notice-scale: 1;
+    width: 297mm;   /* A4 가로 전체 폭 */
+    height: 210mm;  /* A4 가로 전체 높이 */
+    padding: 3mm 4mm; /* 최소 안전 여백 */
+    box-sizing: border-box;
+    overflow: hidden;
     page-break-inside: avoid !important;
+    break-inside: avoid;
+    page-break-after: always;
+    break-after: page;
+  }
+  .print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  .print-scale {
+    display: flow-root; /* margin collapse 방지 */
+    zoom: var(--print-scale, 1);
+    transform: scale(var(--print-scale, 1));
+    transform-origin: top left;
+  }
+  .print-notice-inner {
+    transform-origin: top left;
+  }
+  body.print-use-zoom .print-notice-inner {
+    zoom: var(--notice-scale, 1);
+  }
+  body:not(.print-use-zoom) .print-notice-inner {
+    font-size: calc(1em * var(--notice-scale, 1));
+    line-height: calc(1.4 * var(--notice-scale, 1));
+  }
+  body.print-use-zoom .print-scale {
+    transform: none !important;
   }
 }
 body {
   background-color: #F8F9F7; /* 아주 연한 웜 화이트 */
+}
+
+/* 화면에서도 인쇄 크기 기준으로 스케일 계산하기 위한 보정 */
+.print-sizing #print-area {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  width: auto;
+  padding: 0;
+}
+.print-sizing .print-page {
+  --notice-scale: 1;
+  width: 297mm;
+  height: 210mm;
+  padding: 3mm 4mm;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.print-sizing .print-scale {
+  display: flow-root;
+  zoom: var(--print-scale, 1);
+}
+.print-sizing .print-notice-inner {
+  transform-origin: top left;
+}
+body.print-use-zoom.print-sizing .print-notice-inner {
+  zoom: var(--notice-scale, 1);
+}
+body:not(.print-use-zoom).print-sizing .print-notice-inner {
+  font-size: calc(1em * var(--notice-scale, 1));
+  line-height: calc(1.4 * var(--notice-scale, 1));
+}
+.print-sizing #print-area ul {
+  margin: 0;
+}
+body.print-use-zoom.print-sizing .print-scale {
+  transform: none !important;
 }

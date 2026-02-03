@@ -1,5 +1,5 @@
 // src/components/WeeklySchedule.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSchedule } from '../context/ScheduleContext';
 import PrintControls from './PrintControls.jsx';
 // ✅ 편집페이지에서 저장한 오버라이드 값을 구독
@@ -122,8 +122,253 @@ export default function WeeklySchedule({
     r.readAsText(f);
   };
 
-  const handlePrintSingle=()=>{ setPrintingAll(false); setTimeout(()=>window.print(),0); };
-  const handlePrintAll=()=>{ setPrintingAll(true); setTimeout(()=>{ window.print(); setPrintingAll(false); },100); };
+  const getPxPerMm = () => {
+    const probe = document.createElement('div');
+    probe.style.width = '1mm';
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    document.body.appendChild(probe);
+    const px = probe.getBoundingClientRect().width || 3.78;
+    probe.remove();
+    return px;
+  };
+
+  const supportsZoom = () => {
+    try {
+      return typeof CSS !== 'undefined' && CSS.supports && CSS.supports('zoom', '1');
+    } catch {
+      return false;
+    }
+  };
+
+  const enablePrintSizing = () => {
+    document.body.classList.add('print-sizing');
+    if (supportsZoom()) {
+      document.body.classList.add('print-use-zoom');
+    } else {
+      document.body.classList.remove('print-use-zoom');
+    }
+  };
+
+  const disablePrintSizing = () => {
+    document.body.classList.remove('print-sizing');
+    document.body.classList.remove('print-use-zoom');
+  };
+
+  const getPaddingSize = (el) => {
+    const cs = window.getComputedStyle(el);
+    const px = (v) => parseFloat(v || '0') || 0;
+    return {
+      x: px(cs.paddingLeft) + px(cs.paddingRight),
+      y: px(cs.paddingTop) + px(cs.paddingBottom),
+    };
+  };
+
+  const getContentSize = (el) => {
+    const rect = el.getBoundingClientRect();
+    const w = Math.max(rect.width, el.scrollWidth, el.offsetWidth);
+    const h = Math.max(rect.height, el.scrollHeight, el.offsetHeight);
+    return { w, h };
+  };
+
+  const getContentBounds = (root) => {
+    const rootRect = root.getBoundingClientRect();
+    let maxRight = rootRect.right;
+    let maxBottom = rootRect.bottom;
+    const nodes = root.querySelectorAll('*');
+    for (let i = 0; i < nodes.length; i += 1) {
+      const el = nodes[i];
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      const cs = window.getComputedStyle(el);
+      const mr = parseFloat(cs.marginRight) || 0;
+      const mb = parseFloat(cs.marginBottom) || 0;
+      if (r.right + mr > maxRight) maxRight = r.right + mr;
+      if (r.bottom + mb > maxBottom) maxBottom = r.bottom + mb;
+    }
+    return {
+      w: Math.max(0, maxRight - rootRect.left),
+      h: Math.max(0, maxBottom - rootRect.top),
+    };
+  };
+
+  const applyPrintScaling = () => {
+    const isPrintMode = window.matchMedia && window.matchMedia('print').matches;
+    if (!isPrintingRef.current && !isPrintMode) return;
+    enablePrintSizing();
+    const pages = document.querySelectorAll('#print-area .print-page');
+    if (!pages.length) return;
+
+    const isPrint = isPrintMode;
+    let fallbackW = 0;
+    let fallbackH = 0;
+    if (!isPrint) {
+      const pxPerMm = getPxPerMm();
+      fallbackW = 297 * pxPerMm; // A4 가로 전체
+      fallbackH = 210 * pxPerMm; // A4 세로 전체
+    }
+
+    pages.forEach((page) => {
+      const scaleTarget = page.querySelector('.print-scale');
+      if (!scaleTarget) return;
+      const noticeBlock = page.querySelector('.print-notices');
+
+      // reset scales so we measure the natural size
+      page.style.setProperty('--print-scale', 1);
+      page.style.setProperty('--notice-scale', 1);
+
+      const pad = getPaddingSize(page);
+      const availableW = (isPrint && page.clientWidth) ? page.clientWidth : fallbackW;
+      const availableH = (isPrint && page.clientHeight) ? page.clientHeight : fallbackH;
+      const innerW = Math.max(0, availableW - pad.x);
+      const innerH = Math.max(0, availableH - pad.y);
+      if (!innerW || !innerH) return;
+
+      const fitScale = () => {
+        page.style.setProperty('--print-scale', 1);
+        const base = getContentBounds(scaleTarget);
+        if (!base.w || !base.h) return null;
+        let scale = Math.min(innerW / base.w, innerH / base.h);
+        if (!Number.isFinite(scale) || scale <= 0) return null;
+
+        // 반복 보정: 실제 렌더링 높이까지 확인 후 미세 축소
+        const safeW = Math.max(0, innerW - 6);
+        const safeH = Math.max(0, innerH - 10);
+        for (let i = 0; i < 6; i += 1) {
+          page.style.setProperty('--print-scale', scale.toFixed(3));
+          const after = getContentBounds(scaleTarget);
+          const usedW = after.w;
+          const usedH = after.h;
+          if (usedW <= safeW && usedH <= safeH) break;
+          const fix = Math.min(safeW / usedW, safeH / usedH);
+          if (!Number.isFinite(fix) || fix <= 0) break;
+          scale = scale * fix;
+        }
+        page.style.setProperty('--print-scale', scale.toFixed(3));
+
+        // 마지막 안전 보정
+        const tail = getContentBounds(scaleTarget);
+        if (tail.h > safeH || tail.w > safeW) {
+          const fix = Math.min(safeW / tail.w, safeH / tail.h) * 0.99;
+          if (Number.isFinite(fix) && fix > 0) {
+            scale = scale * fix;
+            page.style.setProperty('--print-scale', scale.toFixed(3));
+          }
+        }
+        return scale;
+      };
+
+      for (let pass = 0; pass < 3; pass += 1) {
+        const scale = fitScale();
+        if (!scale) break;
+
+        const after = getContentBounds(scaleTarget);
+        const safeH = Math.max(0, innerH - 6);
+        const overflow = after.h - safeH;
+        if (overflow <= 0.5 || !noticeBlock) break;
+
+        const noticeBounds = getContentBounds(noticeBlock);
+        if (!noticeBounds.h) break;
+
+        const currentNoticeScale = parseFloat(
+          page.style.getPropertyValue('--notice-scale') || '1'
+        );
+        const targetNoticeH = Math.max(0, noticeBounds.h - overflow - 2);
+        let nextNoticeScale = (targetNoticeH / noticeBounds.h) * currentNoticeScale;
+        nextNoticeScale = Math.min(1, Math.max(0.75, nextNoticeScale));
+
+        if (nextNoticeScale >= currentNoticeScale - 0.002) break;
+        page.style.setProperty('--notice-scale', nextNoticeScale.toFixed(3));
+      }
+    });
+  };
+
+  const runAfterRender = (fn) => {
+    const run = () => requestAnimationFrame(() => requestAnimationFrame(fn));
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(run).catch(run);
+    } else {
+      run();
+    }
+  };
+
+  const isPrintingRef = useRef(false);
+  const pendingScaleTimerRef = useRef(null);
+
+  const cleanupAfterPrint = () => {
+    if (pendingScaleTimerRef.current) {
+      clearTimeout(pendingScaleTimerRef.current);
+      pendingScaleTimerRef.current = null;
+    }
+    disablePrintSizing();
+    setPrintingAll(false);
+    isPrintingRef.current = false;
+  };
+
+  const handlePrintSingle = () => {
+    setPrintingAll(false);
+    enablePrintSizing();
+    isPrintingRef.current = true;
+    runAfterRender(() => {
+      applyPrintScaling();
+      window.print();
+    });
+  };
+
+  const handlePrintAll = () => {
+    setPrintingAll(true);
+    setTimeout(() => {
+      enablePrintSizing();
+      isPrintingRef.current = true;
+      runAfterRender(() => {
+        applyPrintScaling();
+        window.print();
+      });
+    }, 100);
+  };
+
+  useEffect(() => {
+    const onBeforePrint = () => {
+      enablePrintSizing();
+      isPrintingRef.current = true;
+      applyPrintScaling();
+      if (pendingScaleTimerRef.current) clearTimeout(pendingScaleTimerRef.current);
+      pendingScaleTimerRef.current = setTimeout(() => {
+        if (isPrintingRef.current) applyPrintScaling();
+      }, 50);
+    };
+    const onAfterPrint = () => {
+      cleanupAfterPrint();
+    };
+    const onFocus = () => {
+      if (isPrintingRef.current) cleanupAfterPrint();
+    };
+    const onVisibility = () => {
+      if (!document.hidden && isPrintingRef.current) cleanupAfterPrint();
+    };
+    const media = window.matchMedia ? window.matchMedia('print') : null;
+    const onMediaChange = (e) => {
+      if (!e.matches && isPrintingRef.current) cleanupAfterPrint();
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    if (media) {
+      if (media.addEventListener) media.addEventListener('change', onMediaChange);
+      else if (media.addListener) media.addListener(onMediaChange);
+    }
+    return () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      window.removeEventListener('afterprint', onAfterPrint);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (media) {
+        if (media.removeEventListener) media.removeEventListener('change', onMediaChange);
+        else if (media.removeListener) media.removeListener(onMediaChange);
+      }
+    };
+  }, []);
   const confirmAndSetPeriodFromInputs = () => {
     const s = (startDate || "").trim();
     const e = (endDate || "").trim();
@@ -639,27 +884,33 @@ export default function WeeklySchedule({
         </div>
 
         {/* 공지사항 */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-4 print-notices">
           {printOpts.notices.enabled && (
             <div className="border border-print-line rounded-sm p-3 bg-josun-soft/40 border-l-4 border-l-josun-dark">
-              <h3 className="font-semibold mb-2 text-josun-dark tracking-wide">
-              주간 공지 사항  
-            </h3>
-              <ul className="list-disc pl-5 text-xs text-left">
-                {noticeMessage.split('\n').filter(Boolean).map((line, i) => <li key={i}>{line}</li>)}
-              </ul>
+              <div className="print-notice-inner">
+                <h3 className="font-semibold mb-2 text-josun-dark tracking-wide">
+                주간 공지 사항  
+              </h3>
+                <ul className="list-disc pl-5 text-xs text-left">
+                  {noticeMessage.split('\n').filter(Boolean).map((line, i) => <li key={i}>{line}</li>)}
+                </ul>
+              </div>
             </div>
           )}
           <div className="border border-print-line rounded-sm p-3 bg-gold-soft/40 border-l-4 border-l-gold-dark">
+            <div className="print-notice-inner">
               <h3 className="font-semibold mb-2 text-josun-dark tracking-wide">📅 월간 공지 사항</h3>
-            <ul className="list-disc pl-5 text-xs text-left">
-              {monthlyNotice.split('\n').filter(Boolean).map((line, i) => <li key={i}>{line}</li>)}
-            </ul>
+              <ul className="list-disc pl-5 text-xs text-left">
+                {monthlyNotice.split('\n').filter(Boolean).map((line, i) => <li key={i}>{line}</li>)}
+              </ul>
+            </div>
           </div>
         </div>
       </div>
     );
   };
+
+  const singlePage = renderPage(selectedStudentId);
 
   return (
     <div>
@@ -781,13 +1032,20 @@ export default function WeeklySchedule({
       )}
       <div id="print-area">
         {printingAll
-           ? students.map(s =>
-                <div key={s.id} className="break-after-page">
+          ? students.map((s) => (
+              <div key={s.id} className="print-page">
+                <div className="print-scale">
                   {renderPage(s.id)}
                 </div>
-              )
-            : renderPage(selectedStudentId)
-          } 
+              </div>
+            ))
+          : singlePage && (
+              <div className="print-page">
+                <div className="print-scale">
+                  {singlePage}
+                </div>
+              </div>
+            )}
       </div>
     </div>
   );
