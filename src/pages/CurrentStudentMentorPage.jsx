@@ -1,5 +1,6 @@
 // src/pages/CurrentStudentMentorPage.jsx
 import React, { useEffect } from "react";
+import { saveAs } from "file-saver";
 import { useSchedule } from "../context/ScheduleContext";
 import { weeklyMentorAssigner } from "../utils/weeklyMentorAssigner";
 
@@ -57,6 +58,113 @@ const getWeeklyEventsForStudent = (student, selectedPeriod, plannerScheduleByDay
 
   return events;
 };
+
+// ================================
+// ✅ 학생 일정 ↔ 멘토 근무시간 겹침 판정
+// ================================
+const toMinutes = (t) => {
+  if (!t || typeof t !== "string" || !t.includes(":")) return NaN;
+  const [h, m] = t.split(":").map((x) => Number(String(x).trim()));
+  if (Number.isNaN(h) || Number.isNaN(m)) return NaN;
+  return h * 60 + m;
+};
+
+const normalizeTimePair = (value) => {
+  if (Array.isArray(value)) {
+    const a = value.map((v) => (typeof v === "string" ? v.trim() : ""));
+    if (!a[0] && !a[1]) return null;
+    return [a[0] || "", a[1] || ""];
+  }
+
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (!s) return null;
+
+    const cleaned = s.replace(/\s+/g, "");
+    const parts = cleaned.split("~");
+    if (parts.length === 2) return [parts[0], parts[1]];
+
+    const parts2 = cleaned.split("-");
+    if (parts2.length === 2) return [parts2[0], parts2[1]];
+  }
+
+  return null;
+};
+
+const parseMentorRanges = (timeStr) => {
+  if (!timeStr || typeof timeStr !== "string") return [];
+
+  const raw = timeStr
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  const ranges = [];
+
+  for (const chunk of raw) {
+    const cleaned = chunk.replace(/\s+/g, "");
+    let st = null;
+    let en = null;
+
+    if (cleaned.includes("~")) {
+      const parts = cleaned.split("~");
+      if (parts.length === 2) {
+        st = parts[0];
+        en = parts[1];
+      }
+    } else if (cleaned.includes("-")) {
+      const parts = cleaned.split("-");
+      if (parts.length === 2) {
+        st = parts[0];
+        en = parts[1];
+      }
+    }
+
+    if (!st || !en) continue;
+
+    const stMin = toMinutes(st);
+    let enMin = toMinutes(en);
+    if ([stMin, enMin].some((v) => Number.isNaN(v))) continue;
+
+    if (enMin < stMin) enMin += 1440;
+
+    ranges.push({ st, en, stMin, enMin });
+  }
+
+  return ranges;
+};
+
+const isTimeOverlapped = (studentPairRaw, mentorTimeStr) => {
+  const studentPair = normalizeTimePair(studentPairRaw);
+  if (!studentPair) return false;
+
+  const [sSt, sEn] = studentPair;
+  const sStart = toMinutes(sSt);
+  let sEnd = toMinutes(sEn);
+  if ([sStart, sEnd].some((v) => Number.isNaN(v))) return false;
+
+  if (sEnd < sStart) sEnd += 1440;
+
+  const mentorRanges = parseMentorRanges(mentorTimeStr);
+  if (mentorRanges.length === 0) return false;
+
+  for (const r of mentorRanges) {
+    const overlap = Math.min(sEnd, r.enMin) - Math.max(sStart, r.stMin);
+    if (overlap >= 30) return true;
+  }
+
+  return false;
+};
+
+const getMentorTime = (m) =>
+  m?.time ??
+  m?.workTime ??
+  m?.workingTime ??
+  m?.workingHours ??
+  m?.hours ??
+  m?.근무시간 ??
+  m?.근무 ??
+  "";
 
 export default function CurrentStudentMentorPage() {
   const {
@@ -536,6 +644,149 @@ export default function CurrentStudentMentorPage() {
     return "미배정";
   };
 
+  // ================================
+  // ✅ 멘토별 담당 학생 표시용 헬퍼
+  // actualMentor > draft > 확정 > 미배정
+  // ================================
+  const getMentorGroupInfo = (student) => {
+    if (!selectedPeriod) return { mentor: "미배정", tag: null };
+
+    const record = student.mentorHistory?.[selectedPeriod];
+
+    // 1️⃣ 실제 진행 멘토
+    if (record?.actualMentor) {
+      return { mentor: record.actualMentor, tag: "실제" };
+    }
+
+    // 2️⃣ 자동 배정(드래프트)
+    if (student.weeklyMentorDraft?.mentor) {
+      return { mentor: student.weeklyMentorDraft.mentor, tag: "자동" };
+    }
+
+    // 3️⃣ 이번주 확정 멘토
+    if (record?.mentor) {
+      return { mentor: record.mentor, tag: "확정" };
+    }
+
+    return { mentor: "미배정", tag: null };
+  };
+
+  const mentorStudentMap = React.useMemo(() => {
+    if (!selectedPeriod) return {};
+
+    const map = {};
+    students.forEach(s => {
+      const info = getMentorGroupInfo(s);
+      const key = info.mentor || "미배정";
+      if (!map[key]) map[key] = [];
+      map[key].push({
+        id: s.id,
+        name: s.name,
+        tag: info.tag,
+      });
+    });
+
+    Object.values(map).forEach(list => {
+      list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    });
+
+    return Object.fromEntries(
+      Object.entries(map).sort(([a], [b]) => a.localeCompare(b, "ko"))
+    );
+  }, [students, selectedPeriod]);
+
+  // ================================
+  // ✅ 요일별 담당 학생 (겹침 기준)
+  // ================================
+  const mentorStudentsByDay = React.useMemo(() => {
+    if (!selectedPeriod) return {};
+
+    const periodAttendance = attendance[selectedPeriod] || {};
+    const result = days.reduce((acc, day) => {
+      acc[day] = {};
+      return acc;
+    }, {});
+
+    students.forEach((s) => {
+      const info = getMentorGroupInfo(s);
+      const mentorName = info.mentor;
+
+      if (!mentorName || mentorName === "미배정") return;
+
+      const studentAttendance = periodAttendance[s.id] || {};
+      const workingDays = getMentorWorkingDays(mentorName, mentorsByDay);
+
+      workingDays.forEach((day) => {
+        const studentTime = studentAttendance[day];
+        if (!studentTime) return;
+
+        const mentors = mentorsByDay?.[day] || [];
+        const mentorEntries = mentors.filter((m) => m.name === mentorName);
+        if (mentorEntries.length === 0) return;
+
+        const overlapped = mentorEntries.some((m) =>
+          isTimeOverlapped(studentTime, getMentorTime(m))
+        );
+
+        if (!overlapped) return;
+
+        if (!result[day][mentorName]) result[day][mentorName] = [];
+        result[day][mentorName].push({
+          id: s.id,
+          name: s.name,
+          tag: info.tag,
+        });
+      });
+    });
+
+    Object.values(result).forEach((byMentor) => {
+      Object.values(byMentor).forEach((list) => {
+        list.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+      });
+    });
+
+    return result;
+  }, [students, selectedPeriod, attendance, mentorsByDay]);
+
+  // ================================
+  // ✅ 이번주 확정 멘토/요일 JSON 다운로드
+  // ================================
+  const getScheduledDaysForStudent = (student) => {
+    const mentorName =
+      student.weeklyMentorDraft?.mentor ??
+      student.mentorHistory?.[selectedPeriod]?.mentor ??
+      null;
+
+    return getMentorWorkingDays(mentorName, mentorsByDay);
+  };
+
+  const downloadWeeklyMentorJson = () => {
+    if (!selectedPeriod) {
+      alert("주차가 선택되지 않았습니다.");
+      return;
+    }
+
+    const rows = students.map((s) => ({
+      id: s.id,
+      name: s.name,
+      mentor: getDisplayMentorName(s),
+      scheduledDays: getScheduledDaysForStudent(s),
+    }));
+
+    const payload = {
+      periodId: selectedPeriod,
+      exportedAt: new Date().toISOString(),
+      students: rows,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+
+    const safePeriodId = String(selectedPeriod).replace(/[\\/:*?"<>|]/g, "-");
+    saveAs(blob, `재학생_멘토배정_${safePeriodId}.json`);
+  };
+
 
 
   // ================================
@@ -602,6 +853,13 @@ export default function CurrentStudentMentorPage() {
           className="px-4 py-2 bg-green-600 text-white rounded"
         >
           이번주 멘토 확정
+        </button>
+
+        <button
+          onClick={downloadWeeklyMentorJson}
+          className="px-4 py-2 bg-gray-700 text-white rounded"
+        >
+          이번주 멘토 JSON 저장
         </button>
       </div>
       <table className="w-full border-collapse border text-center mb-8">
@@ -899,6 +1157,103 @@ export default function CurrentStudentMentorPage() {
           })}
         </tbody>
             </table>
+
+            {/* ================================
+                ✅ 멘토별 담당 학생 (이번주 기준)
+            ================================ */}
+            <div className="mb-8">
+              <h2 className="text-xl font-semibold mb-2">멘토별 담당 학생</h2>
+
+              {!selectedPeriod && (
+                <div className="text-gray-400">
+                  주차가 선택되지 않았습니다.
+                </div>
+              )}
+
+              {selectedPeriod && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {Object.entries(mentorStudentMap).length === 0 && (
+                    <div className="text-gray-400">
+                      표시할 배정 결과가 없습니다.
+                    </div>
+                  )}
+
+                  {Object.entries(mentorStudentMap).map(([mentor, items]) => (
+                    <div
+                      key={mentor}
+                      className="p-3 border rounded bg-gray-50 shadow-sm"
+                    >
+                      <h3 className="font-bold text-sm mb-1">
+                        {mentor} ({items.length}명)
+                      </h3>
+                      <ul className="text-sm list-disc pl-4">
+                        {items.map(item => (
+                          <li key={item.id}>
+                            {item.name}
+                            {item.tag && (
+                              <span className="ml-1 text-xs text-gray-500">
+                                ({item.tag})
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ================================
+                ✅ 요일별 담당 학생 (겹침 기준)
+            ================================ */}
+            <div className="mb-8">
+              <h2 className="text-xl font-semibold mb-2">요일별 담당 학생</h2>
+
+              {!selectedPeriod && (
+                <div className="text-gray-400">
+                  주차가 선택되지 않았습니다.
+                </div>
+              )}
+
+              {selectedPeriod && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {days.map((day) => (
+                    <div key={day} className="border rounded p-3 bg-white shadow-sm">
+                      <h3 className="font-bold mb-2">{day}요일</h3>
+
+                      {Object.keys(mentorStudentsByDay?.[day] || {}).length === 0 ? (
+                        <div className="text-sm text-gray-400">
+                          겹치는 학생 없음
+                        </div>
+                      ) : (
+                        Object.entries(mentorStudentsByDay[day])
+                          .sort(([a], [b]) => a.localeCompare(b, "ko"))
+                          .map(([mentor, items]) => (
+                            <div key={mentor} className="mb-2">
+                              <div className="font-semibold text-sm">
+                                {mentor} ({items.length}명)
+                              </div>
+                              <ul className="list-disc pl-5 text-sm">
+                                {items.map((item) => (
+                                  <li key={item.id}>
+                                    {item.name}
+                                    {item.tag && (
+                                      <span className="ml-1 text-xs text-gray-500">
+                                        ({item.tag})
+                                      </span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* ================================
                 🔥 여기에 붙이면 됨 (STEP 4)
