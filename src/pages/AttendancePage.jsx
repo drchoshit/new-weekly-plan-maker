@@ -7,6 +7,7 @@ import { saveAs } from "file-saver";
 const days = ["월", "화", "수", "목", "금", "토"];
 
 export default function AttendancePage() {
+  const showStudentAddDeleteButtons = false;
   const {
     students, setStudents,
     attendance, setAttendance,
@@ -14,6 +15,7 @@ export default function AttendancePage() {
     startDate, endDate,
     periods, setPeriods,
     selectedPeriod, setSelectedPeriod,
+    currentPeriodId, setCurrentPeriodId,
   } = useSchedule();
 
   const [searchValue, setSearchValue] = useState("");
@@ -23,6 +25,26 @@ export default function AttendancePage() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
 
+  // 주차 선택값이 비어도 입력이 막히지 않도록 안전한 활성 주차 키를 계산
+  const periodFromList = (periods || []).length > 0 ? periods[periods.length - 1].id : "";
+  const periodFromAttendance = Object.keys(attendance || {}).slice(-1)[0] || "";
+  const activePeriodId =
+    selectedPeriod ||
+    currentPeriodId ||
+    periodFromList ||
+    periodFromAttendance ||
+    "__default__";
+
+  // selected/current 값이 비었으면 활성 주차 키로 복구
+  React.useEffect(() => {
+    if (!selectedPeriod && activePeriodId) {
+      setSelectedPeriod(activePeriodId);
+    }
+    if (!currentPeriodId && activePeriodId) {
+      setCurrentPeriodId(activePeriodId);
+    }
+  }, [selectedPeriod, currentPeriodId, activePeriodId, setSelectedPeriod, setCurrentPeriodId]);
+
   // ✅ 추가: 컨트롤드 인풋 핸들러 (기존 코드에서 참조하던 함수 정의)
   const updateName = (id, value) => {
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, name: value } : s)));
@@ -31,11 +53,9 @@ export default function AttendancePage() {
     setStudents(prev => prev.map(s => (s.id === id ? { ...s, seatNumber: value } : s)));
   };
   const updateTime = (id, day, index, value) => {
-    if (!selectedPeriod) return;
-
     setAttendance(prev => {
       const next = { ...prev };
-      const periodAtt = { ...(next[selectedPeriod] || {}) };
+      const periodAtt = { ...(next[activePeriodId] || {}) };
       const studentAtt = { ...(periodAtt[id] || {}) };
       const per = Array.isArray(studentAtt[day]) ? [...studentAtt[day]] : [];
 
@@ -49,7 +69,7 @@ export default function AttendancePage() {
       }
 
       periodAtt[id] = studentAtt;
-      next[selectedPeriod] = periodAtt;
+      next[activePeriodId] = periodAtt;
 
       return next;
     });
@@ -155,8 +175,7 @@ export default function AttendancePage() {
 
 
   const calculateWeeklyTotal = studentId => {
-    if (!selectedPeriod) return "0시간 0분";
-    const att = attendance[selectedPeriod]?.[studentId] || {};
+    const att = attendance[activePeriodId]?.[studentId] || {};
     const totalMinutes = days.reduce((sum, d) => {
       const times = att[d];
       if (Array.isArray(times) && times[0] && times[1]) {
@@ -228,12 +247,6 @@ export default function AttendancePage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!selectedPeriod) {
-      alert("주차를 먼저 선택하세요.");
-      e.target.value = "";
-      return;
-    }
-
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
@@ -279,7 +292,7 @@ export default function AttendancePage() {
       });
 
       const nextAttendance = { ...attendance };
-      nextAttendance[selectedPeriod] = nextAttendance[selectedPeriod] || {};
+      nextAttendance[activePeriodId] = nextAttendance[activePeriodId] || {};
 
       const nextStudents = [...students];
       const nameToStudent = {};
@@ -341,16 +354,16 @@ export default function AttendancePage() {
         }
 
         const sid = student.id;
-        nextAttendance[selectedPeriod][sid] =
-          nextAttendance[selectedPeriod][sid] || {};
+        nextAttendance[activePeriodId][sid] =
+          nextAttendance[activePeriodId][sid] || {};
 
         days.forEach(day => {
           const cell = row[dayCols[day]];
           const picked = pickBestRange(cell);
           if (picked) {
-            nextAttendance[selectedPeriod][sid][day] = [picked.st, picked.en];
+            nextAttendance[activePeriodId][sid][day] = [picked.st, picked.en];
           } else {
-            delete nextAttendance[selectedPeriod][sid][day];
+            delete nextAttendance[activePeriodId][sid][day];
           }
         });
       }
@@ -379,7 +392,7 @@ export default function AttendancePage() {
       const row = [s.name, s.seatNumber || "", ""];
       let total = 0;
       days.forEach((d) => {
-        const times = attendance[selectedPeriod]?.[s.id]?.[d] || [];
+        const times = attendance[activePeriodId]?.[s.id]?.[d] || [];
         const range = times[0] && times[1] ? `${times[0]}~${times[1]}` : "";
         row.push(range);
         if (times[0] && times[1]) {
@@ -404,7 +417,7 @@ export default function AttendancePage() {
 
     setPeriods(prev => prev.filter(p => p.id !== id));
 
-    if (selectedPeriod === id) {
+    if (selectedPeriod === id || activePeriodId === id) {
       setSelectedPeriod("");
     }
   };
@@ -414,7 +427,9 @@ export default function AttendancePage() {
       <h1 className="text-2xl font-bold mb-2">학생 출결 입력</h1>
 
       <div className="flex items-center gap-4 mb-4">
-        <button onClick={addStudent} className="bg-green-500 text-white px-4 py-2 rounded">+ 학생 추가</button>
+        {showStudentAddDeleteButtons ? (
+          <button onClick={addStudent} className="bg-green-500 text-white px-4 py-2 rounded">+ 학생 추가</button>
+        ) : null}
         <button onClick={handleSortByName} className="bg-blue-500 text-white px-4 py-2 rounded">이름순 정렬</button>
         <button onClick={handleSortBySeat} className="bg-purple-500 text-white px-4 py-2 rounded">좌석순 정렬</button>
         <input
@@ -435,14 +450,16 @@ export default function AttendancePage() {
         <button onClick={handleDownloadExcel} className="bg-green-600 text-white px-4 py-2 rounded">엑셀 다운로드</button>
 
         {/* ✅ 추가: 선택 모드 토글 + 선택 삭제 */}
-        <button onClick={toggleSelectionMode} className="bg-orange-500 text-white px-4 py-2 rounded">
-          {selectionMode ? "선택 모드 해제" : "선택 모드"}
-        </button>
-        {selectionMode && (
+        {showStudentAddDeleteButtons ? (
+          <button onClick={toggleSelectionMode} className="bg-orange-500 text-white px-4 py-2 rounded">
+            {selectionMode ? "선택 모드 해제" : "선택 모드"}
+          </button>
+        ) : null}
+        {showStudentAddDeleteButtons && selectionMode ? (
           <button onClick={deleteSelectedRows} className="bg-red-600 text-white px-4 py-2 rounded">
             선택 삭제
           </button>
-        )}
+        ) : null}
 
         <div className="ml-auto text-lg font-medium">총 학생 수: {students.length}명</div>
       </div>
@@ -465,7 +482,7 @@ export default function AttendancePage() {
               <th key={d} colSpan={2} className="border px-2">{d}</th>
             ))}
             <th className="border px-2">총합</th>
-            <th className="border px-2">삭제</th>
+            {showStudentAddDeleteButtons ? <th className="border px-2">삭제</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -497,7 +514,7 @@ export default function AttendancePage() {
                 />
               </td>
               {days.map(day => {
-                const [start = "", end = ""] = attendance[selectedPeriod]?.[student.id]?.[day] || [];
+                const [start = "", end = ""] = attendance[activePeriodId]?.[student.id]?.[day] || [];
                 return (
                   <React.Fragment key={day}>
                     <td className="border px-1">
@@ -522,14 +539,16 @@ export default function AttendancePage() {
                 );
               })}
               <td className="border px-2">{calculateWeeklyTotal(student.id)}</td>
-              <td className="border px-2">
-                <button
-                  onClick={() => deleteStudent(student.id)}
-                  className="bg-red-500 text-white px-2 py-1 rounded"
-                >
-                  삭제
-                </button>
-              </td>
+              {showStudentAddDeleteButtons ? (
+                <td className="border px-2">
+                  <button
+                    onClick={() => deleteStudent(student.id)}
+                    className="bg-red-500 text-white px-2 py-1 rounded"
+                  >
+                    삭제
+                  </button>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -542,7 +561,7 @@ export default function AttendancePage() {
             <div key={s.id}>
               <strong>{s.name}</strong>: 
               {formatAttendanceSummary(
-                attendance[selectedPeriod]?.[s.id] || {}
+                attendance[activePeriodId]?.[s.id] || {}
               )
             }
             </div>
