@@ -7,7 +7,8 @@ import { saveAs } from "file-saver";
 const days = ["월", "화", "수", "목", "금", "토"];
 
 export default function AttendancePage() {
-  const showStudentAddDeleteButtons = false;
+  const showStudentAddButtons = false;
+  const showStudentDeleteButtons = true;
   const {
     students, setStudents,
     attendance, setAttendance,
@@ -427,7 +428,7 @@ export default function AttendancePage() {
       <h1 className="text-2xl font-bold mb-2">학생 출결 입력</h1>
 
       <div className="flex items-center gap-4 mb-4">
-        {showStudentAddDeleteButtons ? (
+        {showStudentAddButtons ? (
           <button onClick={addStudent} className="bg-green-500 text-white px-4 py-2 rounded">+ 학생 추가</button>
         ) : null}
         <button onClick={handleSortByName} className="bg-blue-500 text-white px-4 py-2 rounded">이름순 정렬</button>
@@ -450,12 +451,12 @@ export default function AttendancePage() {
         <button onClick={handleDownloadExcel} className="bg-green-600 text-white px-4 py-2 rounded">엑셀 다운로드</button>
 
         {/* ✅ 추가: 선택 모드 토글 + 선택 삭제 */}
-        {showStudentAddDeleteButtons ? (
+        {showStudentDeleteButtons ? (
           <button onClick={toggleSelectionMode} className="bg-orange-500 text-white px-4 py-2 rounded">
             {selectionMode ? "선택 모드 해제" : "선택 모드"}
           </button>
         ) : null}
-        {showStudentAddDeleteButtons && selectionMode ? (
+        {showStudentDeleteButtons && selectionMode ? (
           <button onClick={deleteSelectedRows} className="bg-red-600 text-white px-4 py-2 rounded">
             선택 삭제
           </button>
@@ -482,7 +483,7 @@ export default function AttendancePage() {
               <th key={d} colSpan={2} className="border px-2">{d}</th>
             ))}
             <th className="border px-2">총합</th>
-            {showStudentAddDeleteButtons ? <th className="border px-2">삭제</th> : null}
+            {showStudentDeleteButtons ? <th className="border px-2">삭제</th> : null}
           </tr>
         </thead>
         <tbody>
@@ -539,7 +540,7 @@ export default function AttendancePage() {
                 );
               })}
               <td className="border px-2">{calculateWeeklyTotal(student.id)}</td>
-              {showStudentAddDeleteButtons ? (
+              {showStudentDeleteButtons ? (
                 <td className="border px-2">
                   <button
                     onClick={() => deleteStudent(student.id)}
