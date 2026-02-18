@@ -632,6 +632,10 @@ export default function CurrentStudentMentorPage() {
     }
 
     // 🔥 2️⃣ draft를 확정 멘토보다 먼저 보여준다
+    if (student?.isNewStudent && student?.selectedMentor) {
+      return student.selectedMentor;
+    }
+
     if (student.weeklyMentorDraft?.mentor) {
       return student.weeklyMentorDraft.mentor + " (자동)";
     }
@@ -752,10 +756,18 @@ export default function CurrentStudentMentorPage() {
   // ✅ 이번주 확정 멘토/요일 JSON 다운로드
   // ================================
   const getScheduledDaysForStudent = (student) => {
-    const mentorName =
-      student.weeklyMentorDraft?.mentor ??
-      student.mentorHistory?.[selectedPeriod]?.mentor ??
-      null;
+    const mentorName = student?.isNewStudent
+      ? (
+          student?.selectedMentor ??
+          student?.weeklyMentorDraft?.mentor ??
+          student?.mentorHistory?.[selectedPeriod]?.mentor ??
+          null
+        )
+      : (
+          student?.weeklyMentorDraft?.mentor ??
+          student?.mentorHistory?.[selectedPeriod]?.mentor ??
+          null
+        );
 
     return getMentorWorkingDays(mentorName, mentorsByDay);
   };
