@@ -766,12 +766,38 @@ export default function CurrentStudentMentorPage() {
       return;
     }
 
-    const rows = students.map((s) => ({
-      id: s.id,
-      name: s.name,
-      mentor: getDisplayMentorName(s),
-      scheduledDays: getScheduledDaysForStudent(s),
-    }));
+    const checkedNewStudentsWithoutMentor = students.filter((s) =>
+      Boolean(s?.isNewStudent) && !String(s?.selectedMentor || "").trim()
+    );
+
+    if (checkedNewStudentsWithoutMentor.length > 0) {
+      const names = checkedNewStudentsWithoutMentor
+        .map((s) => s?.name)
+        .filter(Boolean)
+        .join(", ");
+      alert(`신입 체크 학생 중 선택 멘토가 비어 있습니다.\n\n${names}`);
+      return;
+    }
+
+    const rows = students.map((s) => {
+      const selectedMentor = String(s?.selectedMentor || "").trim();
+      const isCheckedNewStudent = Boolean(s?.isNewStudent);
+
+      const mentorForExport = isCheckedNewStudent
+        ? (selectedMentor || "미배정")
+        : getDisplayMentorName(s);
+
+      const scheduledDaysForExport = isCheckedNewStudent
+        ? getMentorWorkingDays(mentorForExport, mentorsByDay)
+        : getScheduledDaysForStudent(s);
+
+      return {
+        id: s.id,
+        name: s.name,
+        mentor: mentorForExport || "미배정",
+        scheduledDays: scheduledDaysForExport,
+      };
+    });
 
     const payload = {
       periodId: selectedPeriod,
