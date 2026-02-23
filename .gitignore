@@ -56,3 +56,5 @@ Thumbs.db
 ####################################
 *.bak
 *.old
+server/data/
+server/backups/

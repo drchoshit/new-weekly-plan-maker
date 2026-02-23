@@ -30,27 +30,33 @@ export const getAppState = async token => {
   return handleResponse(response);
 };
 
-export const saveAppState = async (token, state) => {
+export const saveAppState = async (token, state, options = {}) => {
+  const { baseVersion } = options;
   const response = await fetch(buildUrl("/api/state"), {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ state }),
+    body: JSON.stringify({ state, baseVersion }),
   });
 
   return handleResponse(response);
 };
 
-export const saveWeeklyCalendars = async (token, weeklyCalendars) => {
+export const saveWeeklyCalendars = async (
+  token,
+  weeklyCalendars,
+  options = {}
+) => {
+  const { baseVersion } = options;
   const response = await fetch(buildUrl("/api/state/weekly-calendars"), {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ weeklyCalendars }),
+    body: JSON.stringify({ weeklyCalendars, baseVersion }),
   });
 
   return handleResponse(response);

@@ -1,5 +1,5 @@
 // src/pages/MentalCarePage.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useSchedule } from '../context/ScheduleContext';
 import { timeToMinutes, minutesToTime, generateSlots } from '../utils/scheduler';
 
@@ -13,41 +13,15 @@ const frequencyToWeeks = {
 
 export default function MentalCarePage() {
   const [search, setSearch] = useState('');
-  const { students, setStudents, mentalCareSettings, setMentalCareSettings } = useSchedule();
+  const {
+    students,
+    setStudents,
+    mentalCareSettings,
+    setMentalCareSettings,
+    scheduleByDay,
+    setScheduleByDay,
+  } = useSchedule();
   const { mentorTime, sessionDuration } = mentalCareSettings;
-
-  // ─── scheduleByDay 초기화 & 저장 ───
-  const defaultSchedule = days.reduce((o, d) => ({ ...o, [d]: [] }), {});
-  const [scheduleByDay, setScheduleByDay] = useState(() => {
-    const saved = localStorage.getItem('mentalCareSchedule');
-    return saved ? JSON.parse(saved) : defaultSchedule;
-  });
-  useEffect(() => {
-    localStorage.setItem('mentalCareSchedule', JSON.stringify(scheduleByDay));
-  }, [scheduleByDay]);
-
-  // ─── 설정 불러오기 & 저장 ───
-  useEffect(() => {
-    const saved = localStorage.getItem('mentalCareSettings');
-    if (saved) {
-      try {
-        const { mentorTime: mt, sessionDuration: sd } = JSON.parse(saved);
-        setMentalCareSettings(prev => ({
-          ...prev,
-          mentorTime:     mt ?? prev.mentorTime,
-          sessionDuration: sd ?? prev.sessionDuration,
-        }));
-      } catch {
-        console.error('멘탈케어 설정 불러오기 실패');
-      }
-    }
-  }, [setMentalCareSettings]);
-  useEffect(() => {
-    localStorage.setItem(
-      'mentalCareSettings',
-      JSON.stringify({ mentorTime, sessionDuration })
-    );
-  }, [mentorTime, sessionDuration]);
 
   // ─── JSON 백업/복원 ───
   const exportToDesktop = () => {

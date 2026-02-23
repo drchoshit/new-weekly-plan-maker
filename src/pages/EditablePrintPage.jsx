@@ -37,17 +37,6 @@ function getWeeklyMentorInfo({ student, currentPeriodId }) {
 
 
 const DAYS = ["월", "화", "수", "목", "금", "토"];
-const OV_KEY = "printOverrides";
-
-function loadOverrides() {
-  try { return JSON.parse(localStorage.getItem(OV_KEY)) || {}; }
-  catch { return {}; }
-}
-function saveOverrides(next) {
-  localStorage.setItem(OV_KEY, JSON.stringify(next));
-  // 인쇄페이지에게 즉시 반영하도록 알림 (같은 탭에서도 수신 가능하게 커스텀 이벤트 사용)
-  window.dispatchEvent(new Event("print-overrides-updated"));
-}
 
 function confirmAndCreateNewPeriod({
   startDate,
@@ -128,21 +117,17 @@ function confirmAndFixPeriod({
   alert("기준 주가 확정되었습니다.");
 }
 
-function buildPlannerSummaryFromLocalStorage(studentName) {
-  try {
-    const sched = JSON.parse(localStorage.getItem("plannerSchedule")) || {};
-    const lines = [];
-    DAYS.forEach((d) => {
-      const arr = (sched[d] || []).filter((x) => x.student === studentName);
-      if (arr.length > 0) {
-        const ts = arr.map((x) => `${x.start}~${x.end}`).join(", ");
-        lines.push(`${d}: ${ts}`);
-      }
-    });
-    return lines.join(" / ");
-  } catch {
-    return "";
-  }
+function buildPlannerSummaryFromSchedule(scheduleByDay, studentName) {
+  const sched = scheduleByDay || {};
+  const lines = [];
+  DAYS.forEach((d) => {
+    const arr = (sched[d] || []).filter((x) => x.student === studentName);
+    if (arr.length > 0) {
+      const ts = arr.map((x) => `${x.start}~${x.end}`).join(", ");
+      lines.push(`${d}: ${ts}`);
+    }
+  });
+  return lines.join(" / ");
 }
 
 export default function EditablePrintPage() {
@@ -160,6 +145,9 @@ export default function EditablePrintPage() {
 
     // 🔥🔥🔥 이게 빠져 있었음 (핵심)
     mentorsByDay,
+    plannerScheduleByDay,
+    printOverrides,
+    setPrintOverrides,
   } = useSchedule();
 
   const navigate = useNavigate();
@@ -217,7 +205,7 @@ export default function EditablePrintPage() {
   }, [debugMode, studentId, student, currentPeriodId]);
 
 
-  const [overrides, setOverrides] = useState(loadOverrides());
+  const overrides = printOverrides || {};
   const current = overrides[studentId] || {};
 
   const [plannerText, setPlannerText] = useState("");
@@ -226,31 +214,34 @@ export default function EditablePrintPage() {
   const [vdDayText, setVdDayText] = useState(current.viceDirector?.day || "");
   const [vdTimeText, setVdTimeText] = useState(current.viceDirector?.time || "");
 
+  useEffect(() => {
+    if (!student || !mentorNameText) return;
+
+    console.group("🧪 MENTOR DAY DEBUG");
+    console.log("학생:", student.name, "(ID:", student.id, ")");
+    console.log("mentorNameText:", mentorNameText);
+    console.log("mentorsByDay 전체:", mentorsByDay);
+
+    Object.entries(mentorsByDay || {}).forEach(([day, list]) => {
+      console.log(
+        `요일 ${day}:`,
+        list.map(m => m.name)
+      );
+    });
+
+    console.groupEnd();
+  }, [student, mentorNameText, mentorsByDay]);
+
   // 학생 변경/초기 로드 시 자동 채움(오버라이드가 있으면 그걸 우선)
   useEffect(() => {
     if (!student) return;
 
-    const ov = loadOverrides();
+    const ov = printOverrides || {};
     const mine = ov[studentId] || {};
-    const autoPlanner = buildPlannerSummaryFromLocalStorage(student.name);
-    useEffect(() => {
-      if (!student || !mentorNameText) return;
-
-      console.group("🧪 MENTOR DAY DEBUG");
-      console.log("학생:", student.name, "(ID:", student.id, ")");
-      console.log("mentorNameText:", mentorNameText);
-      console.log("mentorsByDay 전체:", mentorsByDay);
-
-      Object.entries(mentorsByDay || {}).forEach(([day, list]) => {
-        console.log(
-          `요일 ${day}:`,
-          list.map(m => m.name)
-        );
-      });
-
-      console.groupEnd();
-    }, [studentId, mentorNameText, mentorsByDay]);
-
+    const autoPlanner = buildPlannerSummaryFromSchedule(
+      plannerScheduleByDay,
+      student.name
+    );
 
     // 🔥 이번 주 기준 멘토/요일을 "항상 최신 student 상태"로 계산
     const weeklyMentorInfo = (() => {
@@ -304,21 +295,20 @@ export default function EditablePrintPage() {
     setVdDayText(weeklyMentorInfo.day ?? "");
 
     setVdTimeText(mine.viceDirector?.time ?? "");
-    setOverrides(ov);
-  }, [studentId, student, currentPeriodId, mentorsByDay]);
+  }, [studentId, student, currentPeriodId, mentorsByDay, plannerScheduleByDay, printOverrides]);
 
 
 
   const onSave = () => {
-    const next = loadOverrides();
-    next[studentId] = {
-      planner: plannerText,
-      mentalCare: mentalCareText,
-      mentorOfWeek: mentorNameText,
-      viceDirector: { day: vdDayText, time: vdTimeText },
-    };
-    saveOverrides(next);
-    setOverrides(next);
+    setPrintOverrides(prev => ({
+      ...(prev || {}),
+      [studentId]: {
+        planner: plannerText,
+        mentalCare: mentalCareText,
+        mentorOfWeek: mentorNameText,
+        viceDirector: { day: vdDayText, time: vdTimeText },
+      },
+    }));
 
     alert("저장 완료 (인쇄페이지에 즉시 반영됩니다)");
   };

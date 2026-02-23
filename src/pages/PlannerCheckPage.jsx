@@ -77,33 +77,20 @@ export default function PlannerCheckPage() {
     attendance,
     mentorsByDay,
     currentPeriodId,
+    plannerCheckTime: checkerTime,
+    setPlannerCheckTime: setCheckerTime,
+    plannerSessionDuration: sessionDuration,
+    setPlannerSessionDuration: setSessionDuration,
+    plannerScheduleByDay: scheduleByDay,
+    setPlannerScheduleByDay: setScheduleByDay,
     noticeMessage,
     setNoticeMessage,
     monthlyNotice,
     setMonthlyNotice,
-    setPlannerScheduleByDay,   // 🔥 추가
   } = useSchedule();
 
   const [searchText, setSearchText] = useState('');
   const [useMentoringDistance, setUseMentoringDistance] = useState(false); // ✅ 추가
-
-  // Checker hours & session length
-  const defaultTime = days.reduce(
-    (o, d) => ({ ...o, [d]: [{ start: '', end: '' }, { start: '', end: '' }] }),
-    {}
-  );
-  const [checkerTime, setCheckerTime] = useState(
-    () => JSON.parse(localStorage.getItem('plannerCheckTime')) || defaultTime
-  );
-  const [sessionDuration, setSessionDuration] = useState(
-    () => JSON.parse(localStorage.getItem('plannerSessionDuration')) || 30
-  );
-
-  // Schedule state
-  const defaultSchedule = days.reduce((o, d) => ({ ...o, [d]: [] }), {});
-  const [scheduleByDay, setScheduleByDay] = useState(
-    () => JSON.parse(localStorage.getItem('plannerSchedule')) || defaultSchedule
-  );
 
   // Ensure weeklySessions ∈ [0,7]
   useEffect(() => {
@@ -114,23 +101,6 @@ export default function PlannerCheckPage() {
       })
     );
   }, [setStudents]);
-
-  // Persist to localStorage
-  useEffect(() => {
-    localStorage.setItem('plannerCheckTime', JSON.stringify(checkerTime));
-  }, [checkerTime]);
-  useEffect(() => {
-    localStorage.setItem('plannerSessionDuration', JSON.stringify(sessionDuration));
-  }, [sessionDuration]);
-  useEffect(() => {
-    localStorage.setItem('plannerSchedule', JSON.stringify(scheduleByDay));
-  }, [scheduleByDay]);
-  useEffect(() => {
-    localStorage.setItem('noticeMessage', noticeMessage);
-  }, [noticeMessage]);
-  useEffect(() => {
-    localStorage.setItem('monthlyNotice', monthlyNotice);
-  }, [monthlyNotice]);
 
   // Edmonds–Karp max-flow
   function edmondsKarp(cap, adj, s, t) {
@@ -473,13 +443,11 @@ export default function PlannerCheckPage() {
     });
 
     setScheduleByDay(newSchedule);
-    setPlannerScheduleByDay(newSchedule); // 🔥 추가
   };
 
   const handleAssignClick = () => {
     const { schedule, reasons } = generatePlannerSchedule();
     setScheduleByDay(schedule);
-    setPlannerScheduleByDay(schedule); // 🔥 추가
 
     if (reasons.length) {
       alert('미배정:\n' + reasons.join('\n'));
@@ -523,7 +491,6 @@ export default function PlannerCheckPage() {
       });
 
       setScheduleByDay(best.schedule);
-      setPlannerScheduleByDay(best.schedule); // 🔥 추가
       const msg =
         `최대 배분 모드 완료\n- 선택된 전략: ${bestName}\n- 총 누락 회수: ${bestEval.totalMissing}\n- 누락 학생 수: ${bestEval.missingStudents}`;
       alert(msg);
@@ -532,7 +499,6 @@ export default function PlannerCheckPage() {
 
     const { schedule, reasons } = generatePlannerSchedule(strategy);
     setScheduleByDay(schedule);
-    setPlannerScheduleByDay(schedule); // 🔥 추가
     if (reasons.length) {
       alert('미배정:\n' + reasons.join('\n'));
     } else {

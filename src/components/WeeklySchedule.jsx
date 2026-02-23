@@ -2,23 +2,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSchedule } from '../context/ScheduleContext';
 import PrintControls from './PrintControls.jsx';
-// ✅ 편집페이지에서 저장한 오버라이드 값을 구독
-import { usePrintOverrides } from '../printOverrides';
 import convertMedicalScheduleJson from '../utils/convertMedicalScheduleJson';
 
 const days = ['월', '화', '수', '목', '금', '토'];
-
-// ✅ 학생별 오버라이드 저장/즉시 반영을 위한 최소 헬퍼
-const OV_KEY = 'printOverrides';
-function readOverrides() {
-  try { return JSON.parse(localStorage.getItem(OV_KEY)) || {}; }
-  catch { return {}; }
-}
-function writeOverrides(next) {
-  localStorage.setItem(OV_KEY, JSON.stringify(next));
-  // 인쇄 페이지 즉시 갱신
-  window.dispatchEvent(new Event('print-overrides-updated'));
-}
 
 export default function WeeklySchedule({ 
   mode = "view", 
@@ -34,6 +20,7 @@ export default function WeeklySchedule({
     students, setStudents,
     mentorsByDay,
     plannerScheduleByDay,
+    scheduleByDay,
     plannerMessage, setPlannerMessage,
     noticeMessage, setNoticeMessage,
     monthlyNotice, setMonthlyNotice,
@@ -42,6 +29,7 @@ export default function WeeklySchedule({
 
     weeklyCalendars, setWeeklyCalendars,
     saveWeeklyCalendarsOnly,
+    printOverrides, setPrintOverrides,
 
     // ✅ 날짜/주차
     startDate, setStartDate,
@@ -76,8 +64,8 @@ export default function WeeklySchedule({
   const toggleOpt = (key,val)=>
     setPrintOpts(o=>({...o,[key]:{...o[key],enabled:val}}));
 
-  // ✅ 추가: 오버라이드 구독 훅
-  const { getForStudent } = usePrintOverrides();
+  const getForStudent = (studentId) =>
+    printOverrides?.[String(studentId)] || {};
 
   useEffect(() => {
     if (mode !== "print" && students.length && !selectedStudentId) {
@@ -417,9 +405,7 @@ export default function WeeklySchedule({
     }
   }, [plannerScheduleByDay]);
 
-  const careSchedule = JSON.parse(
-    localStorage.getItem('mentalCareSchedule') || '{}'
-  );
+  const careSchedule = scheduleByDay || {};
 
   const updateInterviewField = (studentId, field, value) => {
     const updated = {
@@ -430,7 +416,6 @@ export default function WeeklySchedule({
       }
     };
     setStudentInterviewAssignments(updated);
-    localStorage.setItem("studentInterviewAssignments", JSON.stringify(updated));
   };
 
   // ===============================
@@ -452,7 +437,6 @@ export default function WeeklySchedule({
           saveWeeklyCalendarsOnly(converted);
         } else {
           setWeeklyCalendars(converted);
-          localStorage.setItem('weeklyCalendars', JSON.stringify(converted));
         }
 
         console.log('📅 변환된 주간 캘린더', converted);
@@ -467,32 +451,39 @@ export default function WeeklySchedule({
 
   // ✅ 플래너 문구(학생별) 오버라이드 업데이트
   const updatePlannerOverride = (studentId, value) => {
-    const next = readOverrides();
-    next[String(studentId)] = {
-      ...(next[String(studentId)] || {}),
-      planner: value
-    };
-    writeOverrides(next);
+    const sid = String(studentId);
+    setPrintOverrides(prev => ({
+      ...(prev || {}),
+      [sid]: {
+        ...((prev || {})[sid] || {}),
+        planner: value,
+      },
+    }));
   };
 
   // ✅ 플래너 '요일별 시간' 오버라이드 업데이트
   const updatePlannerTimeOverride = (studentId, day, value) => {
     const sid = String(studentId);
-    const next = readOverrides();
-    const cur = next[sid] || {};
-    next[sid] = {
-      ...cur,
-      plannerTimes: { ...(cur.plannerTimes || {}), [day]: value }
-    };
-    writeOverrides(next);
+    setPrintOverrides(prev => {
+      const base = prev || {};
+      const cur = base[sid] || {};
+      return {
+        ...base,
+        [sid]: {
+          ...cur,
+          plannerTimes: { ...(cur.plannerTimes || {}), [day]: value },
+        },
+      };
+    });
   };
 
   // ✅ 금주의 멘토 오버라이드 업데이트 (인쇄페이지에서 직접 수정 가능)
   const updateMentorOverride = (studentId, value) => {
     const sid = String(studentId);
-    const next = readOverrides();
-    next[sid] = { ...(next[sid] || {}), mentorOfWeek: value };
-    writeOverrides(next);
+    setPrintOverrides(prev => ({
+      ...(prev || {}),
+      [sid]: { ...((prev || {})[sid] || {}), mentorOfWeek: value },
+    }));
   };
 
   // ✅ 추가: 정보 리셋(현재 선택된 학생의 표시 수정값 초기화 → 자동배정 상태로 복귀)
@@ -508,11 +499,15 @@ export default function WeeklySchedule({
     if (!window.confirm(`"${student.name}" 학생의 표시 수정값을 초기화하고 자동배정 상태로 되돌릴까요?`)) return;
 
     const sid = String(student.id);
-    const next = readOverrides();
-    if (sid in next) {
+    setPrintOverrides(prev => {
+      const base = prev || {};
+      if (!(sid in base)) {
+        return base;
+      }
+      const next = { ...base };
       delete next[sid]; // plannerTimes/planner/mentorOfWeek/viceDirector 등 모두 제거
-      writeOverrides(next);
-    }
+      return next;
+    });
     // 인터뷰 입력값(studentInterviewAssignments)은 기본 데이터이므로 유지합니다.
     alert('초기화 완료');
   };

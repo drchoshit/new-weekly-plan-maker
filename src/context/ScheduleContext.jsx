@@ -6,11 +6,30 @@ export const ScheduleContext = createContext();
 
 // ✅ 요일 상수 (월~토)
 const days = ["월", "화", "수", "목", "금", "토"];
+const defaultDaySchedule = { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+
+const createDefaultPlannerCheckTime = () =>
+  days.reduce(
+    (acc, day) => ({
+      ...acc,
+      [day]: [
+        { start: "", end: "" },
+        { start: "", end: "" },
+      ],
+    }),
+    {}
+  );
 
 export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const hasHydratedRef = useRef(false);
   const saveTimeoutRef = useRef();
   const skipNextFullSaveRef = useRef(false);
+  const pendingLocalSaveRef = useRef(false);
+  const isSavingRef = useRef(false);
+  const lastConflictAlertAtRef = useRef(0);
+  const serverVersionRef = useRef();
+  const [hasHydrated, setHasHydrated] = useState(false);
+  const [serverVersion, setServerVersion] = useState();
   const [students, setStudents] = useState(() => {
     try {
       const saved = localStorage.getItem("students");
@@ -96,10 +115,36 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   // 🔥 [신규] 플래너 체크 결과 (읽기 전용 공유용)
   const [plannerScheduleByDay, setPlannerScheduleByDay] = useState(() => {
     try {
-      const saved = localStorage.getItem("plannerScheduleByDay");
-      return saved ? JSON.parse(saved) : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+      const saved =
+        localStorage.getItem("plannerScheduleByDay") ||
+        localStorage.getItem("plannerSchedule");
+      return saved ? JSON.parse(saved) : defaultDaySchedule;
     } catch {
-      return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+      return defaultDaySchedule;
+    }
+  });
+  const [plannerCheckTime, setPlannerCheckTime] = useState(() => {
+    try {
+      const saved = localStorage.getItem("plannerCheckTime");
+      return saved ? JSON.parse(saved) : createDefaultPlannerCheckTime();
+    } catch {
+      return createDefaultPlannerCheckTime();
+    }
+  });
+  const [plannerSessionDuration, setPlannerSessionDuration] = useState(() => {
+    try {
+      const saved = localStorage.getItem("plannerSessionDuration");
+      return saved ? JSON.parse(saved) : 30;
+    } catch {
+      return 30;
+    }
+  });
+  const [printOverrides, setPrintOverrides] = useState(() => {
+    try {
+      const saved = localStorage.getItem("printOverrides");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
     }
   });
 
@@ -126,7 +171,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     }
   });
 
-  const defaultSchedule = { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+  const defaultSchedule = defaultDaySchedule;
   const [scheduleByDay, setScheduleByDay] = useState(() => {
     try {
       const saved = localStorage.getItem("mentalCareSchedule");
@@ -157,6 +202,34 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const [studentInterviewAssignments, setStudentInterviewAssignments] = useState(() => {
     try {
       const saved = localStorage.getItem("studentInterviewAssignments");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [interviewSettings, setInterviewSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem("interviewSettings");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [interviewSchedule, setInterviewSchedule] = useState(() => {
+    try {
+      const saved = localStorage.getItem("interviewSchedule");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [interviewDuration, setInterviewDuration] = useState(() => {
+    const parsed = Number(localStorage.getItem("interviewDuration"));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 30;
+  });
+  const [interviewWilling, setInterviewWilling] = useState(() => {
+    try {
+      const saved = localStorage.getItem("interviewWilling");
       return saved ? JSON.parse(saved) : {};
     } catch {
       return {};
@@ -362,7 +435,25 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       "plannerScheduleByDay",
       JSON.stringify(plannerScheduleByDay)
     );
+    // Backward compatibility with legacy pages reading plannerSchedule directly.
+    localStorage.setItem("plannerSchedule", JSON.stringify(plannerScheduleByDay));
   }, [plannerScheduleByDay]);
+
+  useEffect(() => {
+    localStorage.setItem("plannerCheckTime", JSON.stringify(plannerCheckTime));
+  }, [plannerCheckTime]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "plannerSessionDuration",
+      JSON.stringify(plannerSessionDuration)
+    );
+  }, [plannerSessionDuration]);
+
+  useEffect(() => {
+    localStorage.setItem("printOverrides", JSON.stringify(printOverrides));
+    window.dispatchEvent(new Event("print-overrides-updated"));
+  }, [printOverrides]);
 
   useEffect(() => {
     localStorage.setItem("attendance", JSON.stringify(attendance));
@@ -378,6 +469,22 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       JSON.stringify(studentInterviewAssignments)
     );
   }, [studentInterviewAssignments]);
+
+  useEffect(() => {
+    localStorage.setItem("interviewSettings", JSON.stringify(interviewSettings));
+  }, [interviewSettings]);
+
+  useEffect(() => {
+    localStorage.setItem("interviewSchedule", JSON.stringify(interviewSchedule));
+  }, [interviewSchedule]);
+
+  useEffect(() => {
+    localStorage.setItem("interviewDuration", String(interviewDuration));
+  }, [interviewDuration]);
+
+  useEffect(() => {
+    localStorage.setItem("interviewWilling", JSON.stringify(interviewWilling));
+  }, [interviewWilling]);
 
   useEffect(() => {
     localStorage.setItem("startDate", startDate);
@@ -422,10 +529,17 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
     // 🔥 플래너 체크 결과
     plannerScheduleByDay,
+    plannerCheckTime,
+    plannerSessionDuration,
+    printOverrides,
 
     attendance,
     assignments,
     studentInterviewAssignments,
+    interviewSettings,
+    interviewSchedule,
+    interviewDuration,
+    interviewWilling,
     startDate,
     endDate,
     periods,
@@ -459,12 +573,23 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       setScheduleByDay(data.scheduleByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] });
     if ("plannerScheduleByDay" in data)
       setPlannerScheduleByDay(
-        data.plannerScheduleByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
+        data.plannerScheduleByDay ?? defaultDaySchedule
       );
+    if ("plannerCheckTime" in data)
+      setPlannerCheckTime(
+        data.plannerCheckTime ?? createDefaultPlannerCheckTime()
+      );
+    if ("plannerSessionDuration" in data)
+      setPlannerSessionDuration(data.plannerSessionDuration ?? 30);
+    if ("printOverrides" in data) setPrintOverrides(data.printOverrides ?? {});
     if ("attendance" in data) setAttendance(data.attendance ?? {});
     if ("assignments" in data) setAssignments(data.assignments ?? []);
     if ("studentInterviewAssignments" in data)
       setStudentInterviewAssignments(data.studentInterviewAssignments ?? {});
+    if ("interviewSettings" in data) setInterviewSettings(data.interviewSettings ?? {});
+    if ("interviewSchedule" in data) setInterviewSchedule(data.interviewSchedule ?? {});
+    if ("interviewDuration" in data) setInterviewDuration(data.interviewDuration ?? 30);
+    if ("interviewWilling" in data) setInterviewWilling(data.interviewWilling ?? {});
     if ("startDate" in data) setStartDate(data.startDate ?? "");
     if ("endDate" in data) setEndDate(data.endDate ?? "");
     if ("periods" in data) setPeriods(data.periods ?? []);
@@ -472,6 +597,41 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     if ("currentPeriodId" in data) setCurrentPeriodId(data.currentPeriodId ?? "");
     if ("weeklyCalendars" in data) setWeeklyCalendars(data.weeklyCalendars ?? {});
     if ("studentConsultings" in data) setStudentConsultings(data.studentConsultings ?? {});
+  };
+
+  const applyServerSnapshot = snapshot => {
+    if (!snapshot) return;
+    skipNextFullSaveRef.current = true;
+    setAllState(snapshot.state ?? {});
+
+    if (Number.isInteger(snapshot.version)) {
+      serverVersionRef.current = snapshot.version;
+      setServerVersion(snapshot.version);
+    }
+  };
+
+  const notifyConflict = () => {
+    const now = Date.now();
+    if (now - lastConflictAlertAtRef.current < 3000) {
+      return;
+    }
+    lastConflictAlertAtRef.current = now;
+    window.alert(
+      "다른 컴퓨터에서 먼저 수정된 내용이 있어 최신 서버 데이터로 갱신했습니다. 방금 수정한 내용은 다시 확인 후 저장해 주세요."
+    );
+  };
+
+  const handleVersionConflict = error => {
+    if (error?.status !== 409) {
+      return false;
+    }
+    applyServerSnapshot({
+      state: error?.body?.state ?? {},
+      version: error?.body?.version,
+    });
+    pendingLocalSaveRef.current = false;
+    notifyConflict();
+    return true;
   };
 
   const saveWeeklyCalendarsOnly = async (nextWeeklyCalendars) => {
@@ -487,18 +647,37 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       return;
     }
 
+    pendingLocalSaveRef.current = true;
+    isSavingRef.current = true;
     try {
-      await saveWeeklyCalendars(authToken, nextWeeklyCalendars ?? {});
+      const response = await saveWeeklyCalendars(
+        authToken,
+        nextWeeklyCalendars ?? {},
+        { baseVersion: serverVersionRef.current }
+      );
+      if (Number.isInteger(response?.version)) {
+        serverVersionRef.current = response.version;
+        setServerVersion(response.version);
+      }
     } catch (error) {
       if (error?.status === 401 && onUnauthorized) {
         onUnauthorized();
+      } else if (!handleVersionConflict(error)) {
+        console.error("Failed to save weekly calendars:", error);
       }
+    } finally {
+      pendingLocalSaveRef.current = false;
+      isSavingRef.current = false;
     }
   };
 
   useEffect(() => {
     if (!authToken) {
       hasHydratedRef.current = false;
+      setHasHydrated(false);
+      serverVersionRef.current = undefined;
+      setServerVersion(undefined);
+      pendingLocalSaveRef.current = false;
       return;
     }
 
@@ -510,12 +689,14 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         if (!isActive) {
           return;
         }
-        setAllState(response?.state);
+        applyServerSnapshot(response);
         hasHydratedRef.current = true;
+        setHasHydrated(true);
       } catch (error) {
         if (error?.status === 401 && onUnauthorized) {
           onUnauthorized();
         }
+        console.error("Initial state sync failed:", error);
       }
     };
 
@@ -527,7 +708,62 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   }, [authToken, onUnauthorized]);
 
   useEffect(() => {
-    if (!authToken || !hasHydratedRef.current) {
+    if (!authToken) {
+      return;
+    }
+
+    let disposed = false;
+
+    const pollLatestState = async () => {
+      try {
+        const response = await getAppState(authToken);
+        if (disposed) {
+          return;
+        }
+
+        const incomingVersion = response?.version;
+        const knownVersion = serverVersionRef.current;
+
+        if (!Number.isInteger(incomingVersion)) {
+          return;
+        }
+
+        if (!hasHydratedRef.current) {
+          applyServerSnapshot(response);
+          hasHydratedRef.current = true;
+          setHasHydrated(true);
+          return;
+        }
+
+        if (Number.isInteger(knownVersion) && incomingVersion <= knownVersion) {
+          return;
+        }
+
+        // Preserve local in-flight edits. Conflict check on save handles the rest.
+        if (pendingLocalSaveRef.current || isSavingRef.current) {
+          return;
+        }
+
+        applyServerSnapshot(response);
+      } catch (error) {
+        if (error?.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
+      }
+    };
+
+    const timer = setInterval(() => {
+      pollLatestState();
+    }, 5000);
+
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [authToken, onUnauthorized]);
+
+  useEffect(() => {
+    if (!authToken || !hasHydrated) {
       return;
     }
 
@@ -540,21 +776,44 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       return;
     }
 
+    pendingLocalSaveRef.current = true;
     saveTimeoutRef.current = setTimeout(() => {
-      saveAppState(authToken, getAllState()).catch(error => {
-        if (error?.status === 401 && onUnauthorized) {
-          onUnauthorized();
-        }
-      });
+      isSavingRef.current = true;
+      saveAppState(authToken, getAllState(), {
+        baseVersion: serverVersionRef.current,
+      })
+        .then(response => {
+          if (Number.isInteger(response?.version)) {
+            serverVersionRef.current = response.version;
+            setServerVersion(response.version);
+          }
+        })
+        .catch(error => {
+          if (error?.status === 401 && onUnauthorized) {
+            onUnauthorized();
+            return;
+          }
+          if (!handleVersionConflict(error)) {
+            console.error("Failed to save app state:", error);
+          }
+        })
+        .finally(() => {
+          isSavingRef.current = false;
+          pendingLocalSaveRef.current = false;
+        });
     }, 800);
 
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+        }
+      if (!isSavingRef.current) {
+        pendingLocalSaveRef.current = false;
       }
     };
   }, [
     authToken,
+    hasHydrated,
     students,
     mentorsByDay,
     plannerMessage,
@@ -563,9 +822,16 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     mentalCareSettings,
     scheduleByDay,
     plannerScheduleByDay,
+    plannerCheckTime,
+    plannerSessionDuration,
+    printOverrides,
     attendance,
     assignments,
     studentInterviewAssignments,
+    interviewSettings,
+    interviewSchedule,
+    interviewDuration,
+    interviewWilling,
     startDate,
     endDate,
     periods,
@@ -588,9 +854,16 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         scheduleByDay, setScheduleByDay,
         // 🔥 플래너 체크 결과 공유용
         plannerScheduleByDay, setPlannerScheduleByDay,
+        plannerCheckTime, setPlannerCheckTime,
+        plannerSessionDuration, setPlannerSessionDuration,
+        printOverrides, setPrintOverrides,
         attendance, setAttendance,
         assignments, setAssignments,
         studentInterviewAssignments, setStudentInterviewAssignments,
+        interviewSettings, setInterviewSettings,
+        interviewSchedule, setInterviewSchedule,
+        interviewDuration, setInterviewDuration,
+        interviewWilling, setInterviewWilling,
         startDate, setStartDate,
         endDate, setEndDate,
         periods, setPeriods,
@@ -603,6 +876,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         weeklyCalendars, setWeeklyCalendars,
         studentConsultings, setStudentConsultings,
 
+        serverVersion,
         getAllState, setAllState,
         saveWeeklyCalendarsOnly,
       }}

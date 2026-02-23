@@ -1,5 +1,5 @@
 // src/pages/ViceDirectorPage.jsx
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useState } from 'react';
 import { ScheduleContext } from '../context/ScheduleContext';
 import { timeToMinutes, minutesToTime, generateSlots } from '../utils/scheduler';
 
@@ -12,22 +12,17 @@ export default function Page7() {
     attendance,
     selectedPeriod, // 🔥 추가
     studentInterviewAssignments,
-    setStudentInterviewAssignments
+    setStudentInterviewAssignments,
+    interviewSettings,
+    setInterviewSettings,
+    interviewSchedule,
+    setInterviewSchedule,
+    interviewDuration: duration,
+    setInterviewDuration: setDuration,
+    interviewWilling,
+    setInterviewWilling,
   } = useContext(ScheduleContext);
-
-  const [interviewSettings, setInterviewSettings] = useState(() =>
-    JSON.parse(localStorage.getItem('interviewSettings') || '{}')
-  );
-  const [interviewSchedule, setInterviewSchedule] = useState(() =>
-    JSON.parse(localStorage.getItem('interviewSchedule') || '{}')
-  );
-  const [duration, setDuration] = useState(() =>
-    Number(localStorage.getItem('interviewDuration')) || 30
-  );
   const [errors, setErrors] = useState([]);
-  const [interviewWilling, setInterviewWilling] = useState(() =>
-    JSON.parse(localStorage.getItem('interviewWilling') || '{}')
-  );
 
   const handleTimeChange = (day, type, value) => {
     setInterviewSettings(prev => ({
@@ -38,9 +33,7 @@ export default function Page7() {
 
   const toggleWilling = (id) => {
     setInterviewWilling(prev => {
-      const updated = { ...prev, [id]: !prev[id] };
-      localStorage.setItem('interviewWilling', JSON.stringify(updated));
-      return updated;
+      return { ...prev, [id]: !prev[id] };
     });
   };
 
@@ -76,7 +69,6 @@ export default function Page7() {
     setInterviewSchedule(result);
     setStudentInterviewAssignments(studentDayTime);
     setErrors(failed);
-    localStorage.setItem('interviewSchedule', JSON.stringify(result));
   };
 
   const getStudentAvailableSlots = (id) => {
@@ -138,7 +130,6 @@ export default function Page7() {
       const updated = { ...prev };
       if (!updated[day]) updated[day] = [];
       updated[day].push({ student: name, start, end });
-      localStorage.setItem('interviewSchedule', JSON.stringify(updated));
       return updated;
     });
 
@@ -154,17 +145,9 @@ export default function Page7() {
       const updated = { ...prev };
       updated[day] = [...(updated[day] || [])];
       updated[day].splice(index, 1);
-      localStorage.setItem('interviewSchedule', JSON.stringify(updated));
       return updated;
     });
   };
-
-  useEffect(() => {
-    localStorage.setItem('interviewSettings', JSON.stringify(interviewSettings));
-    localStorage.setItem('interviewDuration', duration);
-    localStorage.setItem('interviewSchedule', JSON.stringify(interviewSchedule));
-    localStorage.setItem('interviewWilling', JSON.stringify(interviewWilling));
-  }, [interviewSettings, duration, interviewSchedule, interviewWilling]);
 
   return (
     <div className="p-4 space-y-6">
