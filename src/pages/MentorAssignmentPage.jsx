@@ -1,302 +1,730 @@
-// src/pages/MentorAssignmentPage.jsx
-import React, { useEffect, useContext, useState } from "react";
-import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
-import { ScheduleContext } from "../context/ScheduleContext";
+﻿import React, { useMemo, useState } from "react";
 import Select from "react-select";
-import { assignMentorsToStudents } from "../utils/mentorAssigner";
-import { timeToMinutes } from "../utils/scheduler";
+import { useSchedule } from "../context/ScheduleContext";
+import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
 
-const koreanOptions = ["화작", "언매", "공통"].map(v => ({ label: v, value: v }));
-const mathOptions = ["미적", "확통", "기하", "공통"].map(v => ({ label: v, value: v }));
-const exploreOptions = [
-  "통합사회", "한국지리", "세계지리", "세계사", "동아시아사",
-  "경제", "정치와 법", "사회·문화", "생활과 윤리", "윤리와 사상",
-  "통합과학", "과학탐구 실험", "물리학Ⅰ", "화학Ⅰ", "생명과학Ⅰ", "지구과학Ⅰ"
-].map(v => ({ label: v, value: v }));
+const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
+const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
+const KOREAN = ["\uC5B8\uB9E4", "\uD654\uC791", "\uACF5\uD1B5"].map(v => ({ value: v, label: v }));
+const MATH = ["\uBBF8\uC801", "\uD655\uD1B5", "\uAE30\uD558", "\uACF5\uD1B5"].map(v => ({
+  value: v,
+  label: v,
+}));
+const EXPLORE = [
+  "\uD1B5\uD569\uC0AC\uD68C",
+  "\uC138\uACC4\uC9C0\uB9AC",
+  "\uD55C\uAD6D\uC9C0\uB9AC",
+  "\uC138\uACC4\uC0AC",
+  "\uB3D9\uC544\uC2DC\uC544\uC0AC",
+  "\uACBD\uC81C",
+  "\uC815\uCE58\uC640 \uBC95",
+  "\uC0AC\uD68C\uBB38\uD654",
+  "\uC0DD\uD65C\uACFC \uC724\uB9AC",
+  "\uC724\uB9AC\uC640 \uC0AC\uC0C1",
+  "\uD1B5\uD569\uACFC\uD559",
+  "\uACFC\uD559\uD0D0\uAD6C \uC2E4\uD5D8",
+  "\uBB3C\uB9AC\uD5591",
+  "\uD654\uD5591",
+  "\uC0DD\uBA85\uACFC\uD5591",
+  "\uC9C0\uAD6C\uACFC\uD5591",
+  "\uBB3C\uB9AC\uD5592",
+  "\uD654\uD5592",
+  "\uC0DD\uBA85\uACFC\uD5592",
+  "\uC9C0\uAD6C\uACFC\uD5592",
+].map(v => ({ value: v, label: v }));
+const PERSONALITY_OPTIONS = [
+  "",
+  "\uBE44\uADF9\uB2E8\uC801",
+  "\uADF9I",
+  "\uADF9E",
+].map(v => ({ value: v, label: v || "\uC120\uD0DD" }));
 
-const days = ["월", "화", "수", "목", "금", "토"];
-
-// ✅ STEP 3-1: 선택된 멘토가 오는 요일 목록 계산
-const getMentorDays = (mentorName, mentorsByDay) => {
-  if (!mentorName) return [];
-
-  return days.filter((day) => {
-    const mentors = mentorsByDay[day] || [];
-    return mentors.some((m) => m.name === mentorName);
+const n = v => String(v || "").trim();
+const dayFromYmd = ymd => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(n(ymd));
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return "";
+  return DAY_LABEL_BY_JS[d.getDay()] || "";
+};
+const isExtremeI = value => {
+  const cleaned = n(value).toUpperCase().replace(/\s+/g, "");
+  return (
+    cleaned === "\uADF9I" ||
+    cleaned === "EXTREMEI" ||
+    cleaned === "EXTREME_I" ||
+    cleaned === "I"
+  );
+};
+const isExtremeIConflict = (studentPersonality, mentorPersonality) =>
+  isExtremeI(studentPersonality) && isExtremeI(mentorPersonality);
+const toMin = t => {
+  if (!t || !String(t).includes(":")) return NaN;
+  const [h, m] = String(t).split(":").map(Number);
+  return Number.isNaN(h) || Number.isNaN(m) ? NaN : h * 60 + m;
+};
+const pair = v => {
+  if (Array.isArray(v)) {
+    const a = n(v[0]);
+    const b = n(v[1]);
+    return a && b ? [a, b] : null;
+  }
+  const s = n(v).replace(/\s+/g, "");
+  if (!s) return null;
+  const d = s.includes("~") ? "~" : s.includes("-") ? "-" : null;
+  if (!d) return null;
+  const p = s.split(d);
+  return p.length === 2 ? [p[0], p[1]] : null;
+};
+const ranges = raw =>
+  String(raw || "")
+    .split(",")
+    .map(v => n(v).replace(/\s+/g, ""))
+    .filter(Boolean)
+    .map(v => {
+      const d = v.includes("~") ? "~" : v.includes("-") ? "-" : null;
+      if (!d) return null;
+      const [a, b] = v.split(d);
+      const st = toMin(a);
+      let en = toMin(b);
+      if (Number.isNaN(st) || Number.isNaN(en)) return null;
+      if (en < st) en += 1440;
+      return { st, en };
+    })
+    .filter(Boolean);
+const mTime = m =>
+  m?.time ?? m?.workTime ?? m?.workingTime ?? m?.workingHours ?? m?.hours ?? "";
+const overlap = (sTime, mentorTime) => {
+  const p = pair(sTime);
+  if (!p) return 0;
+  const st = toMin(p[0]);
+  let en = toMin(p[1]);
+  if (Number.isNaN(st) || Number.isNaN(en)) return 0;
+  if (en < st) en += 1440;
+  let mx = 0;
+  ranges(mentorTime).forEach(r => {
+    mx = Math.max(mx, Math.min(en, r.en) - Math.max(st, r.st));
   });
+  return Math.max(0, mx);
+};
+const workingDays = (mentorName, byDay) =>
+  DAYS.filter(day => (byDay?.[day] || []).some(m => n(m?.name) === n(mentorName)));
+const nextWeekGap = (prev, curr) => {
+  const a = DAYS.indexOf(prev);
+  const b = DAYS.indexOf(curr);
+  if (a < 0 || b < 0) return null;
+  // 이번 주 prev 요일에서 "다음 주 curr 요일"까지의 실제 간격
+  return 7 - (a + 1) + (b + 1);
+};
+const periodPriority = gap => {
+  if (!gap || gap < 5) return null;
+  // 7일(같은 요일)과 가까울수록 우선
+  return Math.abs(gap - 7);
+};
+const sortedPeriods = periods =>
+  (periods || []).filter(p => p?.id).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+const mentorProfiles = byDay => {
+  const map = new Map();
+  DAYS.forEach(day =>
+    (byDay?.[day] || []).forEach(m => {
+      const name = n(m?.name);
+      if (!name) return;
+      if (!map.has(name)) map.set(name, { math: new Set(), exp: new Set() });
+      const p = map.get(name);
+      if (m?.mathSubject) p.math.add(m.mathSubject);
+      if (m?.explore1) p.exp.add(m.explore1);
+      if (m?.explore2) p.exp.add(m.explore2);
+    })
+  );
+  return map;
 };
 
-const MentorAssignmentPage = () => {
-  // ✅ 신입생 여부 기본값 보장 (기존 학생 데이터 보호)
-  useEffect(() => {
-    setStudents(prev =>
-      prev.map(s => ({
-        ...s,
-        isNewStudent: s.isNewStudent ?? false,
-      }))
-    );
-  }, []);
-
+export default function MentorAssignmentPage() {
   const {
-    assignments, setAssignments,
-    students, setStudents,
+    students,
+    setStudents,
     mentorsByDay,
     attendance,
     selectedPeriod,
-    currentPeriodId,
-  } = useContext(ScheduleContext);
+    periods,
+    assignments,
+    setAssignments,
+    plannerScheduleByDay,
+  } = useSchedule();
 
-  const [modalContent, setModalContent] = useState(null);
+  const [maxPerMentor, setMaxPerMentor] = useState(6);
+  const [popup, setPopup] = useState({ title: "", text: "" });
+  const closePopup = () => setPopup({ title: "", text: "" });
 
-  const updateStudent = (id, field, value) => {
-    setStudents(prev =>
-      prev.map(s => (s.id === id ? { ...s, [field]: value } : s))
-    );
+  const pList = useMemo(() => sortedPeriods(periods), [periods]);
+  const prevPeriodId = useMemo(() => {
+    const idx = pList.findIndex(p => p.id === selectedPeriod);
+    return idx > 0 ? pList[idx - 1].id : null;
+  }, [pList, selectedPeriod]);
+  const profiles = useMemo(() => mentorProfiles(mentorsByDay), [mentorsByDay]);
+  const mentorNames = useMemo(
+    () => Array.from(profiles.keys()).sort((a, b) => a.localeCompare(b, "ko")),
+    [profiles]
+  );
+  const periodAttendance = attendance?.[selectedPeriod] || {};
+  const aMap = useMemo(() => {
+    const m = new Map();
+    (assignments || []).forEach(a => m.set(a.studentId, a));
+    return m;
+  }, [assignments]);
+
+  const prevRecord = student => {
+    if (!prevPeriodId) return null;
+    const r = student?.mentorHistory?.[prevPeriodId];
+    return r?.mentor ? { mentor: n(r.mentor), day: n(r.day) || null } : null;
   };
+  const activeMentor = student =>
+    n(student?.mentorHistory?.[selectedPeriod]?.actualMentor) ||
+    n(student?.mentorHistory?.[selectedPeriod]?.mentor);
 
-  const assignMentors = () => {
-    console.log("selectedPeriod:", selectedPeriod);
-    console.log("currentPeriodId:", currentPeriodId);
-    console.log(
-      "attendance[selectedPeriod]:",
-      attendance[selectedPeriod]
-    );
-    console.log(
-      "attendance[currentPeriodId]:",
-      attendance[currentPeriodId]
-    );
+  const resolveFixedMentorDay = student => {
+    const fixedMentor = n(student?.fixedMentor);
+    if (!fixedMentor) return "";
 
-    if (!currentPeriodId) {
-      alert("기준 주가 확정되지 않았습니다.\n인쇄 페이지에서 '날짜 변경 확정'을 먼저 하세요.");
-      return;
-    }
-
-    const periodAttendance = attendance[selectedPeriod] || {};
-
-    // 🔥 신입생만 자동 배정 대상
-    const newStudents = students.filter(s => s.isNewStudent);
-
-    const result = assignMentorsToStudents({
-      students: newStudents,
-      mentorsByDay,
-      attendanceByPeriod: attendance,
-      currentPeriodId,
+    let best = { day: "", ov: -1 };
+    DAYS.forEach(day => {
+      const sTime = periodAttendance?.[student.id]?.[day];
+      if (!sTime) return;
+      const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === fixedMentor);
+      if (!entries.length) return;
+      entries.forEach(entry => {
+        const ov = overlap(sTime, mTime(entry));
+        if (ov > best.ov) best = { day, ov };
+      });
     });
 
-    setAssignments(result);
-
-    // ✅ 자동배정 결과는 assignments로만 관리
-    // (선택 멘토 / mentorHistory는 여기서 건드리지 않음)
-
-    alert(`자동 배정 완료\n기준 주: ${currentPeriodId}`);
+    return best.day || workingDays(fixedMentor, mentorsByDay)[0] || "";
   };
 
-  const showModal = (text) => {
-    setModalContent(text);
+  const hasAnyOverlapWithMentor = (student, mentorName) => {
+    const mentor = n(mentorName);
+    if (!mentor) return false;
+    for (const day of DAYS) {
+      const sTime = periodAttendance?.[student.id]?.[day];
+      if (!sTime) continue;
+      const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === mentor);
+      if (!entries.length) continue;
+      if (entries.some(entry => overlap(sTime, mTime(entry)) >= 30)) return true;
+    }
+    return false;
   };
 
-  const closeModal = () => {
-    setModalContent(null);
+  const buildCandidates = student => {
+    const excluded = new Set(
+      [student?.bannedMentor1, student?.bannedMentor2]
+        .filter(Boolean)
+        .flatMap(v => String(v).split(",").map(x => x.trim()).filter(Boolean))
+    );
+    const prev = prevRecord(student);
+    const names = mentorNames;
+    const cand = [];
+    const studentPersonality = n(student?.personality);
+
+    names.forEach(name => {
+      if (!name) return;
+      if (excluded.has(name)) return;
+      workingDays(name, mentorsByDay).forEach(day => {
+        const sTime = periodAttendance?.[student.id]?.[day];
+        if (!sTime) return;
+        const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === name);
+        if (!entries.length) return;
+        const compatible = entries.filter(
+          entry => !isExtremeIConflict(studentPersonality, entry?.personality)
+        );
+        if (!compatible.length) return;
+        const ov = compatible.reduce((mx, e) => Math.max(mx, overlap(sTime, mTime(e))), 0);
+        if (ov < 30) return; // 1순위 필수
+        const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
+        const pScore = prev?.day ? periodPriority(gap) : 0;
+        if (prev?.day && pScore === null) return; // 최소 5일 간격
+
+        const p = profiles.get(name);
+        const exp =
+          Boolean(student?.explore1 && p?.exp?.has(student.explore1)) ||
+          Boolean(student?.explore2 && p?.exp?.has(student.explore2));
+        const math = Boolean(student?.math && p?.math?.has(student.math));
+
+        // 멘토가 여러 요일 근무하면 (멘토, 요일) 각각 독립 후보로 취급
+        cand.push({
+          mentor: name,
+          day,
+          ov,
+          gap,
+          pScore: pScore ?? 0,
+          exp,
+          math,
+        });
+      });
+    });
+
+    return cand.sort((a, b) => {
+      // 2순위: 기간
+      if ((a.pScore ?? 0) !== (b.pScore ?? 0)) return (a.pScore ?? 0) - (b.pScore ?? 0);
+      if ((a.gap ?? 99) !== (b.gap ?? 99)) return (a.gap ?? 99) - (b.gap ?? 99);
+      // 3순위: 탐구
+      if (a.exp !== b.exp) return a.exp ? -1 : 1; // 3순위
+      // 4순위: 수학
+      if (a.math !== b.math) return a.math ? -1 : 1; // 4순위
+      if (a.ov !== b.ov) return b.ov - a.ov;
+      return a.mentor.localeCompare(b.mentor, "ko");
+    });
   };
 
-  const setSelectedMentorAndFreezeInitial = (
-    studentId,
-    mentorName,
-    source = "manual"
-  ) => {
-    if (!mentorName) return;
+  const reasonText = (student, c) => {
+    const prev = prevRecord(student);
+    return [
+      `시간 겹침: ${c.ov}분`,
+        prev?.day ? `전주 요일 간격: ${prev.day} -> ${c.day} (${c.gap || 0}일)` : "전주 요일 기준 없음",
+      `탐구 매칭: ${c.exp ? "일치" : "불일치"}`,
+      `수학 매칭: ${c.math ? "일치" : "불일치"}`,
+    ].join("\n");
+  };
 
+  const commitMentor = (student, mentorName, day) => {
+    if (!selectedPeriod || !mentorName) return;
+    const pickedDay = n(day) || workingDays(mentorName, mentorsByDay)[0] || "";
     setStudents(prev =>
       prev.map(s => {
-        if (s.id !== studentId) return s;
-
-        // 1️⃣ 선택 멘토 갱신
-        const next = {
+        if (s.id !== student.id) return s;
+        const old = s?.mentorHistory?.[selectedPeriod] || {};
+        return {
           ...s,
           selectedMentor: mentorName,
+          selectedMentorDay: pickedDay,
+          initialMentor: s?.initialMentor?.mentor
+            ? s.initialMentor
+            : { mentor: mentorName, day: pickedDay, periodId: selectedPeriod, createdAt: Date.now() },
+          mentorHistory: {
+            ...(s.mentorHistory || {}),
+            [selectedPeriod]: {
+              ...old,
+              mentor: mentorName,
+              day: pickedDay,
+              attended: true,
+              missedCarryOver: false,
+              missedDay: undefined,
+            },
+          },
         };
-
-        // 2️⃣ 최초 멘토가 없을 때만 박제 (🔥 핵심)
-        next.initialMentor = {
-          mentor: mentorName,
-          day: "",
-          periodId: currentPeriodId || "initial",
-          createdAt: Date.now(),
-        };
-        return next;
       })
     );
   };
 
+  const loadText = nextStudents => {
+    const counts = {};
+    nextStudents.forEach(s => {
+      const m = activeMentor(s);
+      if (!m) return;
+      counts[m] = (counts[m] || 0) + 1;
+    });
+    const lines = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko"))
+      .map(([m, c]) => `${m}: ${c}명`);
+    return lines.length
+      ? `멘토별 현재 배정 인원\n\n${lines.join("\n")}`
+      : "배정된 멘토 없음";
+  };
 
+  const autoAssign = () => {
+    if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
+    const byStudent = {};
+    students.forEach(s => {
+      byStudent[s.id] = buildCandidates(s);
+    });
+    const order = [...students].sort((a, b) => (byStudent[a.id].length || 0) - (byStudent[b.id].length || 0));
+    const loads = {};
+    const pick = {};
 
-  // ✅ ESC 키로 모달 닫기
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") closeModal(); };
-    if (modalContent) window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [modalContent]);
+    order.forEach(s => {
+      const fixed = n(s?.fixedMentor);
+      const base = byStudent[s.id] || [];
+      const avail = base.filter(c => (loads[c.mentor] || 0) < Number(maxPerMentor));
+      const ranks = (avail.length ? avail : base).slice(0, 5);
+      const chosen = fixed
+        ? { mentor: fixed, day: resolveFixedMentorDay(s) }
+        : avail[0] || null;
+      if (chosen) loads[chosen.mentor] = (loads[chosen.mentor] || 0) + 1;
+      pick[s.id] = { ranks, chosen };
+    });
 
-  // ✅ 검증 함수 (멘토링 가능 여부 + 상세 결과)
-  const checkOverlap = (student) => {
-    const selectedMentorName = student.selectedMentor;
-    if (!selectedMentorName) {
-      showModal("⚠ 선택된 멘토가 없습니다.");
+    setAssignments(
+      students.map(s => {
+        const r = pick[s.id]?.ranks || [];
+        return {
+          studentId: s.id,
+          first: r[0]?.mentor || "",
+          second: r[1]?.mentor || "",
+          third: r[2]?.mentor || "",
+          fourth: r[3]?.mentor || "",
+          fifth: r[4]?.mentor || "",
+          days: {
+            first: r[0]?.day || "",
+            second: r[1]?.day || "",
+            third: r[2]?.day || "",
+            fourth: r[3]?.day || "",
+            fifth: r[4]?.day || "",
+          },
+          reasons: {
+            first: r[0] ? reasonText(s, r[0]) : "후보 없음",
+            second: r[1] ? reasonText(s, r[1]) : "후보 없음",
+            third: r[2] ? reasonText(s, r[2]) : "후보 없음",
+            fourth: r[3] ? reasonText(s, r[3]) : "후보 없음",
+            fifth: r[4] ? reasonText(s, r[4]) : "후보 없음",
+          },
+        };
+      })
+    );
+
+      setStudents(prev =>
+        prev.map(s => {
+          const chosen = pick[s.id]?.chosen;
+          if (!chosen) {
+            const old = { ...(s?.mentorHistory?.[selectedPeriod] || {}) };
+            delete old.mentor;
+            delete old.day;
+            delete old.autoRank;
+            delete old.actualMentor;
+            delete old.attended;
+            delete old.missedCarryOver;
+            delete old.missedDay;
+            return {
+              ...s,
+              selectedMentor: "",
+              selectedMentorDay: "",
+              mentorHistory: {
+                ...(s.mentorHistory || {}),
+                [selectedPeriod]: old,
+              },
+            };
+          }
+          const old = s?.mentorHistory?.[selectedPeriod] || {};
+          return {
+            ...s,
+          selectedMentor: chosen.mentor,
+          selectedMentorDay: chosen.day,
+          initialMentor: s?.initialMentor?.mentor
+            ? s.initialMentor
+            : { mentor: chosen.mentor, day: chosen.day, periodId: selectedPeriod, createdAt: Date.now() },
+          mentorHistory: {
+            ...(s.mentorHistory || {}),
+            [selectedPeriod]: {
+              ...old,
+              mentor: chosen.mentor,
+              day: chosen.day,
+              attended: true,
+              missedCarryOver: false,
+              missedDay: undefined,
+              autoRank: 1,
+            },
+          },
+        };
+      })
+    );
+
+    const done = Object.values(pick).filter(v => v?.chosen).length;
+    const lines = Object.entries(loads)
+      .sort((a, b) => b[1] - a[1])
+      .map(([m, c]) => `${m}: ${c}명`)
+      .join("\n");
+    setPopup({
+      title: "자동 배정 완료",
+      text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${students.length}\n최대 인원: ${maxPerMentor}명\n\n${lines || "배정 없음"}`,
+    });
+  };
+
+  const pickRank = (student, key) => {
+    const row = aMap.get(student.id);
+    const mentor = n(row?.[key]);
+    const day = n(row?.days?.[key]);
+    if (!mentor) return;
+    commitMentor(student, mentor, day);
+    const next = students.map(s =>
+      s.id === student.id
+        ? {
+            ...s,
+            selectedMentor: mentor,
+            mentorHistory: {
+              ...(s.mentorHistory || {}),
+              [selectedPeriod]: {
+                ...(s.mentorHistory?.[selectedPeriod] || {}),
+                mentor,
+                day,
+              },
+            },
+          }
+        : s
+    );
+    setPopup({
+      title: `${student.name} 멘토 변경`,
+      text: `${student.name} -> ${mentor}\n\n${row?.reasons?.[key] || ""}\n\n${loadText(next)}`,
+    });
+  };
+
+  const verify = student => {
+    const mentor = activeMentor(student);
+    if (!mentor || !selectedPeriod) {
+      setPopup({ title: "검증 결과", text: `${student.name}: 선택 멘토가 없습니다.` });
       return;
     }
+    const selectedDay =
+      n(student?.mentorHistory?.[selectedPeriod]?.day) || n(student?.selectedMentorDay);
+    const daysToCheck = selectedDay ? [selectedDay] : workingDays(mentor, mentorsByDay);
+    const prev = prevRecord(student);
+    const lines = [];
+    let pass = false;
 
-    let result = [];
-    let matchFound = false;
+    daysToCheck.forEach(day => {
+      const m = (mentorsByDay?.[day] || []).find(v => n(v?.name) === mentor);
+      const ov = overlap(periodAttendance?.[student.id]?.[day], mTime(m));
+      const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
+      const ok = ov >= 30 && (!prev?.day || (gap && gap >= 5));
+      if (ok) pass = true;
+      lines.push(
+        `${day}: 겹침 ${ov}분 / 간격 ${prev?.day ? `${gap || 0}일` : "N/A"} / ${ok ? "적합" : "부적합"}`
+      );
+    });
 
-    for (const day of days) {
-      const periodAttendance = attendance[selectedPeriod] || {};
-      const sTime = periodAttendance[student.id]?.[day];
-
-      if (!sTime || sTime.length < 2) {
-        result.push(`${day} ⛔ (출결 없음)`);
-        continue;
-      }
-
-      const sStart = timeToMinutes(sTime[0]);
-      const sEnd = timeToMinutes(sTime[1]);
-
-      const mentors = mentorsByDay[day] || [];
-      const mentor = mentors.find(m => m.name === selectedMentorName);
-
-      if (!mentor || !mentor.time || !mentor.time.includes("~")) {
-        result.push(`${day} ⛔ (멘토 없음)`);
-        continue;
-      }
-
-      const [mStartStr, mEndStr] = mentor.time.split("~");
-      const mStart = timeToMinutes(mStartStr);
-      const mEnd = timeToMinutes(mEndStr);
-
-      const overlap = Math.min(sEnd, mEnd) - Math.max(sStart, mStart);
-
-      if (overlap >= 30) {
-        result.push(`${day} ✅ (${overlap}분 겹침)`);
-        matchFound = true;
-      } else {
-        result.push(`${day} ❌ (${overlap > 0 ? overlap + "분" : "0분"})`);
-      }
+    if (!daysToCheck.length) {
+      lines.push("멘토 근무 요일 정보가 없어 검증할 수 없습니다.");
     }
 
-    showModal(
-      matchFound
-        ? `🟢 멘토링 가능 (${selectedMentorName})\n\n${result.join("\n")}`
-        : `🔴 멘토링 불가능 (${selectedMentorName})\n\n${result.join("\n")}`
+    setPopup({
+      title: `검증 결과 - ${student.name}`,
+      text: `선택 멘토: ${mentor}\n${
+        prev?.mentor ? `전주 멘토: ${prev.mentor} (${prev.day || "-"})` : "전주 멘토 정보 없음"
+      }\n선택 요일: ${selectedDay || "미지정"}\n\n${lines.join("\n")}\n\n최종: ${
+        pass ? "배정 가능" : "배정 기준 미충족"
+      }`,
+    });
+  };
+
+  const mentorCell = (mentor, day = "") => {
+    const name = n(mentor);
+    if (!name) return <span className="text-gray-300">-</span>;
+    const days = day ? [day] : workingDays(name, mentorsByDay);
+    return (
+      <div>
+        <div className="font-semibold">{name}</div>
+        <div className="text-xs text-gray-500">근무: {days.length ? days.join(", ") : "-"}</div>
+      </div>
     );
   };
 
-  // ✅ 요일별 멘토링 현황 계산 (화면 표시용)
-  const mentoringByDay = days.reduce((acc, day) => {
-    acc[day] = {};
-
-    students.forEach((s) => {
-      const mentor = s.selectedMentor;
+  const byDay = useMemo(() => {
+    const r = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
+    students.forEach(s => {
+      const mentor = activeMentor(s);
       if (!mentor) return;
+      const selectedDay =
+        n(s?.mentorHistory?.[selectedPeriod]?.day) || n(s?.selectedMentorDay);
 
-      const periodAttendance = attendance[selectedPeriod] || {};
-      const studentTime = periodAttendance[s.id]?.[day];
-      if (!studentTime || studentTime.length < 2) return;
-
-      const mentors = mentorsByDay[day] || [];
-      const mentorInfo = mentors.find(m => m.name === mentor);
-      if (!mentorInfo) return;
-
-      if (!acc[day][mentor]) acc[day][mentor] = [];
-      acc[day][mentor].push(s.name);
-    });
-
-    return acc;
-  }, {});
-
-  // ✅ 추가: 전체 검증 (모든 학생을 검사하여 불일치 학생만 모아서 팝업)
-  const checkAllOverlaps = () => {
-    const fails = [];
-
-    students.forEach((s) => {
-      const selectedMentorName = s.selectedMentor;
-
-      if (!selectedMentorName) {
-        fails.push(`• ${s.name}: 선택 멘토 없음`);
+      if (selectedDay) {
+        const bucket = r[selectedDay];
+        if (!bucket) return;
+        const ov = overlap(
+          periodAttendance?.[s.id]?.[selectedDay],
+          mTime((mentorsByDay?.[selectedDay] || []).find(m => n(m.name) === mentor))
+        );
+        if (ov < 30) return;
+        if (!bucket[mentor]) bucket[mentor] = [];
+        bucket[mentor].push(s.name);
         return;
       }
 
-      let matchFound = false;
-      const lines = [];
-
-      for (const day of days) {
-        const periodAttendance = attendance[selectedPeriod] || {};
-        const sTime = periodAttendance[s.id]?.[day];
-
-        if (!sTime || sTime.length < 2) {
-          lines.push(`${day} ⛔ (출결 없음)`);
-          continue;
-        }
-
-        const sStart = timeToMinutes(sTime[0]);
-        const sEnd = timeToMinutes(sTime[1]);
-
-        const mentors = mentorsByDay[day] || [];
-        const mentor = mentors.find(m => m.name === selectedMentorName);
-
-        if (!mentor || !mentor.time || !mentor.time.includes("~")) {
-          lines.push(`${day} ⛔ (멘토 없음)`);
-          continue;
-        }
-
-        const [mStartStr, mEndStr] = mentor.time.split("~");
-        const mStart = timeToMinutes(mStartStr);
-        const mEnd = timeToMinutes(mEndStr);
-
-        const overlap = Math.min(sEnd, mEnd) - Math.max(sStart, mStart);
-
-        if (overlap >= 30) {
-          lines.push(`${day} ✅ (${overlap}분 겹침)`);
-          matchFound = true;
-        } else {
-          lines.push(`${day} ❌ (${overlap > 0 ? overlap + "분" : "0분"})`);
-        }
-      }
-
-      if (!matchFound) {
-        fails.push(`${s.name} (${selectedMentorName})\n  - ${lines.join("\n  - ")}`);
-      }
+      workingDays(mentor, mentorsByDay).forEach(day => {
+        const ov = overlap(
+          periodAttendance?.[s.id]?.[day],
+          mTime((mentorsByDay?.[day] || []).find(m => n(m.name) === mentor))
+        );
+        if (ov < 30) return;
+        if (!r[day][mentor]) r[day][mentor] = [];
+        r[day][mentor].push(s.name);
+      });
     });
+    return r;
+  }, [students, mentorsByDay, periodAttendance, selectedPeriod]);
 
-    if (fails.length === 0) {
-      showModal("🟢 모든 학생이 선택된 멘토와 최소 30분 이상 겹칩니다.");
-    } else {
-      showModal(`🔴 시간 불일치 학생 ${fails.length}명\n\n${fails.join("\n\n")}`);
+  const fixedMentorConflict = useMemo(() => {
+    const map = {};
+    students.forEach(student => {
+      const fixed = n(student?.fixedMentor);
+      if (!fixed) {
+        map[student.id] = false;
+        return;
+      }
+
+      const fixedHasOverlap = hasAnyOverlapWithMentor(student, fixed);
+      if (fixedHasOverlap) {
+        map[student.id] = false;
+        return;
+      }
+
+      const currentMentor = activeMentor(student);
+      const currentHasOverlap =
+        Boolean(currentMentor) && hasAnyOverlapWithMentor(student, currentMentor);
+
+      // 고정멘토가 불일치여도, 현재 선택멘토가 일정 충족이면 경고 해제
+      map[student.id] = !currentHasOverlap;
+    });
+    return map;
+  }, [students, periodAttendance, mentorsByDay, selectedPeriod]);
+
+  const missedMentoringRows = useMemo(
+    () =>
+      students
+        .map(s => {
+          const rec = s?.mentorHistory?.[selectedPeriod];
+          if (!rec || rec.attended !== false || !rec.missedDay) return null;
+          return {
+            studentId: s.id,
+            studentName: s.name,
+            missedMentor: n(rec.mentor) || "-",
+            missedDay: n(rec.missedDay) || "-",
+            missedReason: n(rec.missedReason),
+            manualMentor: n(rec.manualMentor),
+            rescheduleDate: n(rec.rescheduleDate),
+          };
+        })
+        .filter(Boolean),
+    [students, selectedPeriod]
+  );
+
+  const updateMissedMentoringMeta = (studentId, patch) =>
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId || !selectedPeriod) return s;
+        const h = { ...(s.mentorHistory || {}) };
+        const rec = { ...(h[selectedPeriod] || {}) };
+        h[selectedPeriod] = { ...rec, ...patch };
+        return { ...s, mentorHistory: h };
+      })
+    );
+
+  const applyManualMentorAssignment = (studentId, manualMentorFromRow = "", missedDayFromRow = "") => {
+    if (!selectedPeriod) return;
+
+    const target = students.find(s => s.id === studentId);
+    if (!target) return;
+    const rec = target?.mentorHistory?.[selectedPeriod] || {};
+    const manualMentor = n(manualMentorFromRow) || n(rec.manualMentor);
+    const rescheduleDate = n(rec.rescheduleDate);
+    const derivedDay = dayFromYmd(rescheduleDate);
+    const manualDay = derivedDay || n(missedDayFromRow) || n(rec.missedDay) || "";
+
+    if (!manualMentor) {
+      window.alert("수동 배정 멘토를 먼저 선택해 주세요.");
+      return;
     }
+
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+        const h = { ...(s.mentorHistory || {}) };
+        const recNow = { ...(h[selectedPeriod] || {}) };
+        h[selectedPeriod] = {
+          ...recNow,
+          manualMentor,
+          rescheduleDate,
+          rescheduleDay: manualDay,
+          mentor: manualMentor,
+          day: manualDay,
+          manualApplied: true,
+        };
+        return {
+          ...s,
+          selectedMentor: manualMentor,
+          selectedMentorDay: manualDay,
+          mentorHistory: h,
+        };
+      })
+    );
+
+    setPopup({
+      title: "수동 배정 적용",
+      text: `${target.name}\n수동 배정 멘토: ${manualMentor}\n재진행 날짜: ${rescheduleDate || "-"}\n재진행 요일: ${
+        manualDay || "-"
+      }`,
+    });
   };
 
+  const toggleMentorMissed = (studentId, day) =>
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId || !selectedPeriod) return s;
+        const h = { ...(s.mentorHistory || {}) };
+        const rec = { ...(h[selectedPeriod] || {}) };
+        rec.mentor = rec.mentor || n(s.selectedMentor);
+        rec.day = rec.day || day;
+        if (!rec.mentor) return s;
+        if (rec.attended === false && rec.missedDay === day) {
+          rec.attended = true;
+          rec.missedCarryOver = false;
+          rec.missedDay = undefined;
+        } else {
+          rec.attended = false;
+          rec.missedCarryOver = true;
+          rec.missedDay = day;
+        }
+        h[selectedPeriod] = rec;
+        return { ...s, mentorHistory: h };
+      })
+    );
+  const togglePlannerMissed = (studentId, day) =>
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId || !selectedPeriod) return s;
+        const h = { ...(s.plannerHistory || {}) };
+        const rec = { ...(h[selectedPeriod] || {}), day };
+        if (rec.attended === false && rec.missedDay === day) {
+          rec.attended = true;
+          rec.missedCarryOver = false;
+          rec.missedDay = undefined;
+        } else {
+          rec.attended = false;
+          rec.missedCarryOver = true;
+          rec.missedDay = day;
+        }
+        h[selectedPeriod] = rec;
+        return { ...s, plannerHistory: h };
+      })
+    );
+
   return (
-    <div className="p-4 space-y-4">
-      <h1 className="text-2xl font-bold mb-2">6페이지: 자동 멘토 배정</h1>
-      <button
-        onClick={assignMentors}
-        className="bg-blue-500 text-white px-4 py-2 rounded"
-      >
-        자동 배정 실행
-      </button>
+    <div className="p-4 space-y-8">
+      <div>
+        <h1 className="text-2xl font-bold">멘토링 배정 AI</h1>
+        <div className="text-sm text-gray-600">
+          {selectedPeriod ? `기준 주차: ${selectedPeriod}` : "기준 주차 미선택"}
+        </div>
+      </div>
 
-      {/* ✅ 전체 검증 버튼 */}
-      <button
-        onClick={checkAllOverlaps}
-        className="ml-2 bg-purple-600 text-white px-4 py-2 rounded"
-      >
-        전체 검증
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-sm font-medium">멘토 1명 당 최대 학생 수</label>
+        <select
+          className="border rounded px-2 py-1"
+          value={maxPerMentor}
+          onChange={e => setMaxPerMentor(Number(e.target.value))}
+        >
+          {Array.from({ length: 20 }, (_, i) => i + 1).map(v => (
+            <option key={v} value={v}>
+              {v}명
+            </option>
+          ))}
+        </select>
+        <button onClick={autoAssign} className="bg-blue-600 text-white px-4 py-2 rounded">
+          멘토 배정하기
+        </button>
+      </div>
 
-      {/* ✅ 테이블을 스크롤 가능 영역으로 감쌈 */}
-      <div className="overflow-y-auto max-h-[500px] border mt-4">
-        <table className="w-full table-auto border-collapse text-center">
-          <thead className="sticky top-0 bg-gray-100 z-10">
+      <div className="overflow-x-auto border rounded">
+        <table className="w-full border-collapse text-center">
+          <thead className="bg-gray-100">
             <tr>
-              <th className="border p-2">신입</th>   {/* 🔥 추가 */}
               <th className="border p-2">이름</th>
               <th className="border p-2">태어난 해</th>
               <th className="border p-2">성격</th>
@@ -304,180 +732,164 @@ const MentorAssignmentPage = () => {
               <th className="border p-2">수학</th>
               <th className="border p-2">탐구1</th>
               <th className="border p-2">탐구2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {students.map(s => (
+              <tr key={s.id}>
+                <td className="border p-2">{s.name}</td>
+                <td className="border p-2">
+                  <input
+                    className="border rounded px-2 py-1 w-24"
+                    type="number"
+                    value={s.birthYear || ""}
+                    onChange={e =>
+                      setStudents(prev =>
+                        prev.map(x => (x.id === s.id ? { ...x, birthYear: e.target.value } : x))
+                      )
+                    }
+                  />
+                </td>
+                <td className="border p-2">
+                  <select
+                    className="border rounded px-2 py-1 w-28"
+                    value={s.personality || ""}
+                    onChange={e =>
+                      setStudents(prev =>
+                        prev.map(x => (x.id === s.id ? { ...x, personality: e.target.value } : x))
+                      )
+                    }
+                  >
+                    {PERSONALITY_OPTIONS.map(opt => (
+                      <option key={opt.value || "empty"} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="border p-2 min-w-[140px]">
+                  <Select
+                    options={KOREAN}
+                    value={KOREAN.find(v => v.value === s.korean) || null}
+                    onChange={o =>
+                      setStudents(prev => prev.map(x => (x.id === s.id ? { ...x, korean: o?.value || "" } : x)))
+                    }
+                  />
+                </td>
+                <td className="border p-2 min-w-[140px]">
+                  <Select
+                    options={MATH}
+                    value={MATH.find(v => v.value === s.math) || null}
+                    onChange={o =>
+                      setStudents(prev => prev.map(x => (x.id === s.id ? { ...x, math: o?.value || "" } : x)))
+                    }
+                  />
+                </td>
+                <td className="border p-2 min-w-[160px]">
+                  <Select
+                    options={EXPLORE}
+                    value={EXPLORE.find(v => v.value === s.explore1) || null}
+                    onChange={o =>
+                      setStudents(prev =>
+                        prev.map(x => (x.id === s.id ? { ...x, explore1: o?.value || "" } : x))
+                      )
+                    }
+                  />
+                </td>
+                <td className="border p-2 min-w-[160px]">
+                  <Select
+                    options={EXPLORE}
+                    value={EXPLORE.find(v => v.value === s.explore2) || null}
+                    onChange={o =>
+                      setStudents(prev =>
+                        prev.map(x => (x.id === s.id ? { ...x, explore2: o?.value || "" } : x))
+                      )
+                    }
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="overflow-x-auto border rounded">
+        <table className="w-full border-collapse text-center">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="border p-2">이름</th>
               <th className="border p-2">고정멘토</th>
               <th className="border p-2">멘토 배제</th>
+              <th className="border p-2">지난주 멘토</th>
+              <th className="border p-2">지난주 요일</th>
               <th className="border p-2 bg-blue-100">선택 멘토</th>
               <th className="border p-2">1순위</th>
               <th className="border p-2">2순위</th>
               <th className="border p-2">3순위</th>
+              <th className="border p-2">4순위</th>
+              <th className="border p-2">5순위</th>
               <th className="border p-2">검증</th>
             </tr>
           </thead>
           <tbody>
             {students.map(s => {
-              const assign = assignments.find(a => a.studentId === s.id) || {};
+              const row = aMap.get(s.id) || {};
+              const prev = prevRecord(s);
+              const currentMentor = activeMentor(s);
+              const currentMentorDay =
+                n(s?.mentorHistory?.[selectedPeriod]?.day) || n(s?.selectedMentorDay);
               return (
-                <tr
-                  key={s.id}
-                  className={
-                    s.isNewStudent
-                      ? ""
-                      : "bg-gray-100 text-gray-400 opacity-60"
-                  }
-                >
-
-                  {/* 🔥 신입생 체크박스 */}
-                  <td className="border p-1 text-center">
+                <tr key={s.id} className={fixedMentorConflict[s.id] ? "bg-red-50" : ""}>
+                  <td className="border p-2 font-medium">{s.name}</td>
+                  <td className="border p-2">
                     <input
-                      type="checkbox"
-                      checked={!!s.isNewStudent}
-                      onChange={(e) => {
-                        const nextChecked = e.target.checked; // true=신입 유지, false=재학생 전환
-
-                        setStudents(prev =>
-                          prev.map(st => {
-                            if (st.id !== s.id) return st;
-
-                            // 신입으로 다시 켜는 건 상태만 변경
-                            if (nextChecked) {
-                              return { ...st, isNewStudent: true };
-                            }
-
-                            // 여기부터: 신입 해제(재학생 전환)
-                            const selected = (st.selectedMentor || "").trim();
-
-            
-                            return {
-                              ...st,
-                              isNewStudent: false,
-                            };
-                          })
-                        );
-                      }}
-                    />
-
-                  </td>
-                  <td className="border p-1">
-                    {s.name}
-                    {!s.isNewStudent && (
-                      <span className="ml-1 text-xs bg-gray-300 text-gray-700 px-1 rounded">
-                        재학생
-                      </span>
-                    )}
-                  </td>
-
-                  <td className="border p-1">
-                    <input
-                      type="number"
-                      value={s.birthYear || ""}
-                      onChange={(e) => updateStudent(s.id, "birthYear", e.target.value)}
-                      className="w-24 border p-1"
-                    />
-                  </td>
-                  <td className="border p-1">
-                    <select
-                      value={s.personality || ""}
-                      onChange={(e) => updateStudent(s.id, "personality", e.target.value)}
-                    >
-                      <option value="">--선택--</option>
-                      <option value="극I">극I</option>
-                      <option value="극E">극E</option>
-                      <option value="비극단적">비극단적</option>
-                    </select>
-                  </td>
-                  <td className="border p-1">
-                    <Select
-                      options={koreanOptions}
-                      value={koreanOptions.find(o => o.value === s.korean) || null}
-                      onChange={opt => updateStudent(s.id, "korean", opt?.value || "")}
-                    />
-                  </td>
-                  <td className="border p-1">
-                    <Select
-                      options={mathOptions}
-                      value={mathOptions.find(o => o.value === s.math) || null}
-                      onChange={opt => updateStudent(s.id, "math", opt?.value || "")}
-                    />
-                  </td>
-                  <td className="border p-1">
-                    <Select
-                      options={exploreOptions}
-                      value={exploreOptions.find(o => o.value === s.explore1) || null}
-                      onChange={opt => updateStudent(s.id, "explore1", opt?.value || "")}
-                    />
-                  </td>
-                  <td className="border p-1">
-                    <Select
-                      options={exploreOptions}
-                      value={exploreOptions.find(o => o.value === s.explore2) || null}
-                      onChange={opt => updateStudent(s.id, "explore2", opt?.value || "")}
-                    />
-                  </td>
-                  <td className="border p-1">
-                    <input
+                      className="border rounded px-2 py-1 w-28"
                       value={s.fixedMentor || ""}
-                      onChange={(e) => updateStudent(s.id, "fixedMentor", e.target.value)}
-                      className="w-24 border p-1"
+                      onChange={e =>
+                        setStudents(prev =>
+                          prev.map(x => (x.id === s.id ? { ...x, fixedMentor: e.target.value } : x))
+                        )
+                      }
                     />
                   </td>
-                  <td className="border p-1">
+                  <td className="border p-2">
                     <input
+                      className="border rounded px-2 py-1 w-32"
+                      placeholder="쉼표 구분"
                       value={s.bannedMentor1 || ""}
-                      onChange={(e) => updateStudent(s.id, "bannedMentor1", e.target.value)}
-                      className="w-24 border p-1"
+                      onChange={e =>
+                        setStudents(prev =>
+                          prev.map(x => (x.id === s.id ? { ...x, bannedMentor1: e.target.value } : x))
+                        )
+                      }
                     />
                   </td>
-                  <td className="border p-1 text-sm">
-                    <div className="font-semibold">
-                      {s.selectedMentor || ""}
-                    </div>
-                    {s.selectedMentor && (
-                      <div className="text-xs text-gray-500 mt-1">
-                        {getMentorDays(s.selectedMentor, mentorsByDay).join(", ")}
-                      </div>
+                  <td className="border p-2">{prev?.mentor || "-"}</td>
+                  <td className="border p-2">{prev?.day || "-"}</td>
+                  <td className="border p-2">
+                    {currentMentor ? (
+                      mentorCell(currentMentor, currentMentorDay)
+                    ) : (
+                      <span className="text-red-500 text-sm">미배정</span>
                     )}
                   </td>
-
-                  <td
-                    className="border p-1 cursor-pointer hover:bg-yellow-100"
-                    onClick={() => {
-                      setSelectedMentorAndFreezeInitial(
-                        s.id,
-                        assign.first,
-                        "manual" // 🔥 관리자 선택
-                      );
-                      showModal(assign.reasons?.first || "이유 없음");
-                    }}
-                  >
-                    {assign.first || ""}
+                  <td className="border p-2 cursor-pointer hover:bg-yellow-50" onClick={() => pickRank(s, "first")}>
+                    {mentorCell(row.first, row?.days?.first)}
                   </td>
-                  <td
-                    className="border p-1 cursor-pointer hover:bg-yellow-100"
-                    onClick={() => {
-                      setSelectedMentorAndFreezeInitial(
-                        s.id,
-                        assign.second,
-                        "manual"
-                      );
-                      showModal(assign.reasons?.second || "이유 없음");
-                    }}
-                  >
-                    {assign.second || ""}
+                  <td className="border p-2 cursor-pointer hover:bg-yellow-50" onClick={() => pickRank(s, "second")}>
+                    {mentorCell(row.second, row?.days?.second)}
                   </td>
-                  <td
-                    className="border p-1 cursor-pointer hover:bg-yellow-100"
-                    onClick={() => {
-                      setSelectedMentorAndFreezeInitial(s.id, assign.third);
-                      showModal(assign.reasons?.third || "이유 없음");
-                    }}
-                  >
-                    {assign.third || ""}
+                  <td className="border p-2 cursor-pointer hover:bg-yellow-50" onClick={() => pickRank(s, "third")}>
+                    {mentorCell(row.third, row?.days?.third)}
                   </td>
-                  <td className="border p-1">
-                    <button
-                      onClick={() => checkOverlap(s)}
-                      className="px-2 py-1 bg-green-500 text-white rounded text-sm"
-                    >
+                  <td className="border p-2 cursor-pointer hover:bg-yellow-50" onClick={() => pickRank(s, "fourth")}>
+                    {mentorCell(row.fourth, row?.days?.fourth)}
+                  </td>
+                  <td className="border p-2 cursor-pointer hover:bg-yellow-50" onClick={() => pickRank(s, "fifth")}>
+                    {mentorCell(row.fifth, row?.days?.fifth)}
+                  </td>
+                  <td className="border p-2">
+                    <button className="bg-green-600 text-white text-sm px-2 py-1 rounded" onClick={() => verify(s)}>
                       검증
                     </button>
                   </td>
@@ -488,30 +900,23 @@ const MentorAssignmentPage = () => {
         </table>
       </div>
 
-      {/* ✅ 요일별 멘토링 진행 현황 */}
-      <div className="mt-8">
-        <h2 className="text-xl font-semibold mb-4">
-          요일별 멘토링 진행 현황
-        </h2>
-
-        <div className="grid grid-cols-2 gap-4">
-          {days.map(day => (
+      <div>
+        <h2 className="text-xl font-semibold mb-2">요일별 멘토링 진행 현황표</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {DAYS.map(day => (
             <div key={day} className="border rounded p-3 bg-white shadow-sm">
               <h3 className="font-bold mb-2">{day}요일</h3>
-
-              {Object.keys(mentoringByDay[day]).length === 0 ? (
-                <div className="text-sm text-gray-400">
-                  배정된 멘토링 없음
-                </div>
+              {Object.keys(byDay[day] || {}).length === 0 ? (
+                <div className="text-sm text-gray-400">배정 없음</div>
               ) : (
-                Object.entries(mentoringByDay[day]).map(([mentor, students]) => (
+                Object.entries(byDay[day]).map(([mentor, names]) => (
                   <div key={mentor} className="mb-2">
                     <div className="font-semibold text-sm">
-                      {mentor} ({students.length}명)
+                      {mentor} ({names.length}명)
                     </div>
                     <ul className="list-disc pl-5 text-sm">
-                      {students.map(name => (
-                        <li key={name}>{name}</li>
+                      {names.map(name => (
+                        <li key={`${day}-${mentor}-${name}`}>{name}</li>
                       ))}
                     </ul>
                   </div>
@@ -522,70 +927,242 @@ const MentorAssignmentPage = () => {
         </div>
       </div>
 
-      <div className="mt-8">
-        <h2 className="text-xl font-semibold mb-2">멘토별 담당 학생</h2>
-        <div className="grid grid-cols-2 gap-4">
-          {Object.entries(
-            students.reduce((acc, s) => {
-              const selected = s.selectedMentor;
-              if (selected) {
-                if (!acc[selected]) acc[selected] = [];
-                acc[selected].push(s.name);
-              }
-              return acc;
-            }, {})
-          ).map(([mentor, names]) => (
-            <div key={mentor} className="p-2 border rounded bg-gray-50 shadow-sm">
-              <h3 className="font-bold text-sm mb-1">{mentor} ({names.length}명)</h3>
-              <ul className="text-sm list-disc pl-4">
-                {names.map(n => <li key={n}>{n}</li>)}
-              </ul>
-            </div>
-          ))}
+      <div>
+        <h2 className="text-xl font-semibold mb-2">이번주 멘토링 누락 선택</h2>
+        <div className="overflow-x-auto border rounded">
+          <table className="w-full border-collapse text-center">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-2">학생</th>
+                {DAYS.map(day => (
+                  <th key={day} className="border px-2 py-2">
+                    {day}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {students.map(s => (
+                <tr key={s.id}>
+                  <td className="border px-2 py-2 font-medium">{s.name}</td>
+                  {DAYS.map(day => {
+                    const mentor = activeMentor(s);
+                    const hasMentoring = mentor && workingDays(mentor, mentorsByDay).includes(day);
+                    const hasPlanner = (plannerScheduleByDay?.[day] || []).some(
+                      v => String(v?.studentId) === String(s.id)
+                    );
+                    const mRec = s?.mentorHistory?.[selectedPeriod];
+                    const pRec = s?.plannerHistory?.[selectedPeriod];
+                    const mMiss = mRec?.attended === false && mRec?.missedDay === day;
+                    const mCarry = mRec?.missedCarryOver === true && mRec?.missedDay === day;
+                    const pMiss = pRec?.attended === false && pRec?.missedDay === day;
+                    const pCarry = pRec?.missedCarryOver === true && pRec?.missedDay === day;
+
+                    return (
+                      <td key={`${s.id}-${day}`} className="border px-2 py-2 align-top">
+                        <div className="flex flex-col gap-1">
+                          {hasMentoring ? (
+                            <button
+                              className={`rounded px-1 py-0.5 text-sm ${
+                                mCarry ? "bg-red-200" : mMiss ? "bg-orange-200" : "bg-blue-100 hover:bg-blue-200"
+                              }`}
+                              onClick={() => toggleMentorMissed(s.id, day)}
+                            >
+                              {mCarry ? "멘토링(이월)" : mMiss ? "멘토링(누락)" : "멘토링"}
+                            </button>
+                          ) : null}
+                          {hasPlanner ? (
+                            <button
+                              className={`rounded px-1 py-0.5 text-sm ${
+                                pCarry
+                                  ? "bg-red-200"
+                                  : pMiss
+                                  ? "bg-orange-200"
+                                  : "bg-yellow-100 hover:bg-yellow-200"
+                              }`}
+                              onClick={() => togglePlannerMissed(s.id, day)}
+                            >
+                              {pCarry ? "플래너(이월)" : pMiss ? "플래너(누락)" : "플래너"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold mb-2">누락 멘토링 사유 및 재배정 관리</h2>
+        <div className="overflow-x-auto border rounded">
+          <table className="w-full border-collapse text-center text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-2">학생</th>
+                <th className="border px-2 py-2">누락 멘토</th>
+                <th className="border px-2 py-2">누락 요일</th>
+                <th className="border px-2 py-2">누락 사유</th>
+                <th className="border px-2 py-2">수동 배정 멘토</th>
+                <th className="border px-2 py-2">재진행 날짜</th>
+                <th className="border px-2 py-2">적용</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missedMentoringRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="border px-2 py-4 text-gray-500">
+                    누락된 멘토링이 없습니다.
+                  </td>
+                </tr>
+              ) : (
+                missedMentoringRows.map(row => (
+                  <tr key={`missed-${row.studentId}`}>
+                    <td className="border px-2 py-2 font-medium">{row.studentName}</td>
+                    <td className="border px-2 py-2">{row.missedMentor}</td>
+                    <td className="border px-2 py-2">{row.missedDay}</td>
+                    <td className="border px-2 py-2 min-w-[220px]">
+                      <input
+                        className="border rounded px-2 py-1 w-full"
+                        placeholder="예: 학생 컨디션 저하"
+                        value={row.missedReason}
+                        onChange={e =>
+                          updateMissedMentoringMeta(row.studentId, {
+                            missedReason: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="border px-2 py-2 min-w-[150px]">
+                      <select
+                        className="border rounded px-2 py-1 w-full"
+                        value={row.manualMentor}
+                        onChange={e =>
+                          updateMissedMentoringMeta(row.studentId, {
+                            manualMentor: e.target.value,
+                          })
+                        }
+                      >
+                        <option value="">선택</option>
+                        {mentorNames.map(name => (
+                          <option key={`manual-${row.studentId}-${name}`} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="border px-2 py-2 min-w-[160px]">
+                      <input
+                        className="border rounded px-2 py-1 w-full"
+                        type="date"
+                        value={row.rescheduleDate}
+                        onChange={e =>
+                          updateMissedMentoringMeta(row.studentId, {
+                            rescheduleDate: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="border px-2 py-2">
+                      <button
+                        className="bg-blue-600 text-white px-2 py-1 rounded text-xs"
+                        onClick={() =>
+                          applyManualMentorAssignment(row.studentId, row.manualMentor, row.missedDay)
+                        }
+                      >
+                        수동 배정 적용
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          수동 배정 적용 시 해당 학생의 이번 주 선택 멘토가 즉시 변경됩니다.
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-2xl font-bold mb-2">학생별 멘토링 누적 기록</h2>
+        <div className="text-xs text-gray-600 mb-2">
+          색상 의미: <span className="px-1 bg-green-100 rounded">녹색</span> 누락 후 재배정 완료,{" "}
+          <span className="px-1 bg-red-100 rounded">빨강</span> 멘토링 이월,{" "}
+          <span className="px-1 bg-orange-100 rounded">주황</span> 멘토링 누락
+        </div>
+        <div className="overflow-x-auto border rounded">
+          <table className="w-full border-collapse text-center text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-2 sticky left-0 bg-gray-100 z-10">학생</th>
+                {pList.map(p => (
+                  <th key={p.id} className="border px-2 py-2">
+                    {p.id}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {students.map(s => (
+                <tr key={s.id}>
+                  <td className="border px-2 py-2 font-medium sticky left-0 bg-white z-10">{s.name}</td>
+                  {pList.map(p => {
+                    const r = s?.mentorHistory?.[p.id];
+                    if (!r?.mentor) {
+                      return (
+                        <td key={`${s.id}-${p.id}`} className="border px-2 py-2 text-gray-300">
+                          -
+                        </td>
+                      );
+                    }
+                    const miss = r?.attended === false;
+                    const carry = r?.missedCarryOver === true;
+                    const manualApplied = r?.manualApplied === true;
+                    return (
+                      <td
+                        key={`${s.id}-${p.id}`}
+                        className={`border px-2 py-2 ${
+                          manualApplied ? "bg-green-100" : carry ? "bg-red-100" : miss ? "bg-orange-100" : ""
+                        }`}
+                      >
+                        <div className="font-semibold">{r.mentor}</div>
+                        {r.day ? <div className="text-xs text-gray-600">({r.day})</div> : null}
+                        {r.autoRank ? <div className="text-xs text-blue-600">{r.autoRank}순위</div> : null}
+                        {miss && r.actualMentor ? (
+                          <div className="text-xs text-green-700">실제 진행: {r.actualMentor}</div>
+                        ) : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
       <StudentMentorOverlapTable />
 
-      {/* ✅ 모달: 화면 가득 + 내부 스크롤 + sticky 헤더/푸터 + 오버레이 클릭/ESC 닫기 */}
-      {modalContent && (
+      {popup.text ? (
         <div className="fixed inset-0 z-50">
-          {/* overlay */}
-          <div className="absolute inset-0 bg-black/50" onClick={closeModal} />
-          {/* center panel */}
-          <div className="relative mx-auto my-6 max-w-3xl w-[92%] h-[85vh]">
-            <div className="bg-white rounded shadow flex flex-col h-full">
-              {/* header (sticky) */}
-              <div className="px-4 py-2 border-b sticky top-0 bg-white z-10 flex items-center justify-between">
-                <h3 className="text-lg font-semibold">검증 결과</h3>
-                <button
-                  onClick={closeModal}
-                  className="text-gray-500 hover:text-black"
-                  aria-label="닫기"
-                  title="닫기"
-                >
-                  ✕
-                </button>
-              </div>
-              {/* body (scrollable) */}
-              <div className="p-4 overflow-y-auto whitespace-pre-wrap">
-                {modalContent}
-              </div>
-              {/* footer (sticky) */}
-              <div className="px-4 py-2 border-t sticky bottom-0 bg-white z-10">
-                <button
-                  onClick={closeModal}
-                  className="w-full px-4 py-2 bg-blue-500 text-white rounded"
-                >
-                  닫기
-                </button>
-              </div>
+          <div className="absolute inset-0 bg-black/40" onClick={closePopup} />
+          <div className="relative mx-auto my-10 w-[92%] max-w-3xl bg-white rounded shadow-lg">
+            <div className="border-b px-4 py-3 flex items-center justify-between">
+              <h3 className="font-semibold">{popup.title || "안내"}</h3>
+              <button onClick={closePopup}>닫기</button>
+            </div>
+            <div className="p-4">
+              <textarea readOnly value={popup.text} className="w-full h-72 border rounded p-2 text-sm whitespace-pre" />
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
-};
+}
 
-export default MentorAssignmentPage;
+

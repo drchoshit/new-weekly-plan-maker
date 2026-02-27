@@ -1,9 +1,10 @@
 // src/pages/PlannerCheckPage.jsx
 import { useSchedule } from '../context/ScheduleContext';
 import { timeToMinutes, minutesToTime, generateSlots } from '../utils/scheduler';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const days = ["월", "화", "수", "목", "금", "토"];
+const dayLabelByJs = ["일", "월", "화", "수", "목", "금", "토"];
 
 const dayIndexMap = {
   "월": 0,
@@ -12,6 +13,15 @@ const dayIndexMap = {
   "목": 3,
   "금": 4,
   "토": 5,
+};
+
+const n = v => String(v || '').trim();
+const dayFromYmd = ymd => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(n(ymd));
+  if (!m) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return '';
+  return dayLabelByJs[d.getDay()] || '';
 };
 
 // 🔹 멘토링 기준 요일 계산
@@ -569,6 +579,107 @@ export default function PlannerCheckPage() {
     s.name.includes(searchText)
   );
 
+  const hasPlannerSessionForStudentDay = (student, day) =>
+    (scheduleByDay?.[day] || []).some(
+      slot =>
+        String(slot?.studentId) === String(student.id) ||
+        n(slot?.student) === n(student.name)
+    );
+
+  const toggleTotalMentoringMissed = (studentId, day) =>
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId || !currentPeriodId) return s;
+        const history = { ...(s.plannerHistory || {}) };
+        const rec = { ...(history[currentPeriodId] || {}) };
+        rec.day = rec.day || day;
+
+        if (rec.attended === false && rec.missedDay === day) {
+          rec.attended = true;
+          rec.missedCarryOver = false;
+          rec.missedDay = undefined;
+          rec.manualApplied = false;
+        } else {
+          rec.attended = false;
+          rec.missedCarryOver = true;
+          rec.missedDay = day;
+          rec.manualApplied = false;
+        }
+
+        history[currentPeriodId] = rec;
+        return { ...s, plannerHistory: history };
+      })
+    );
+
+  const missedTotalMentoringRows = useMemo(
+    () =>
+      students
+        .map(s => {
+          const rec = s?.plannerHistory?.[currentPeriodId];
+          if (!rec || rec.attended !== false || !rec.missedDay) return null;
+          return {
+            studentId: s.id,
+            studentName: s.name,
+            missedDay: n(rec.missedDay),
+            missedReason: n(rec.missedReason),
+            manualManager: n(rec.manualManager),
+            rescheduleDate: n(rec.rescheduleDate),
+          };
+        })
+        .filter(Boolean),
+    [students, currentPeriodId]
+  );
+
+  const updateMissedTotalMentoringMeta = (studentId, patch) =>
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId || !currentPeriodId) return s;
+        const history = { ...(s.plannerHistory || {}) };
+        const rec = { ...(history[currentPeriodId] || {}) };
+        history[currentPeriodId] = { ...rec, ...patch };
+        return { ...s, plannerHistory: history };
+      })
+    );
+
+  const applyManualTotalMentoringReassign = (studentId, managerFromRow = '', missedDayFromRow = '') => {
+    if (!currentPeriodId) return;
+
+    const target = students.find(s => s.id === studentId);
+    if (!target) return;
+    const rec = target?.plannerHistory?.[currentPeriodId] || {};
+    const manualManager = n(managerFromRow) || n(rec.manualManager);
+    const rescheduleDate = n(rec.rescheduleDate);
+    const rescheduleDay = dayFromYmd(rescheduleDate) || n(missedDayFromRow) || n(rec.missedDay) || '';
+
+    if (!manualManager) {
+      window.alert('수동 배정 담당자를 먼저 입력해 주세요.');
+      return;
+    }
+
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+        const history = { ...(s.plannerHistory || {}) };
+        const recNow = { ...(history[currentPeriodId] || {}) };
+        history[currentPeriodId] = {
+          ...recNow,
+          manualManager,
+          rescheduleDate,
+          rescheduleDay,
+          day: rescheduleDay,
+          manualApplied: true,
+        };
+        return { ...s, plannerHistory: history };
+      })
+    );
+
+    window.alert(
+      `${target.name}\n수동 배정 담당자: ${manualManager}\n재진행 날짜: ${rescheduleDate || '-'}\n재진행 요일: ${
+        rescheduleDay || '-'
+      }`
+    );
+  };
+
   return (
     <div className="space-y-6 p-4">
       {/* Top summary */}
@@ -752,6 +863,152 @@ export default function PlannerCheckPage() {
             )}
           </div>
         ))}
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold mt-6 mb-2">이번주 총괄멘토링 누락 선택</h2>
+        <div className="overflow-x-auto border rounded">
+          <table className="w-full border-collapse text-center">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-2">학생</th>
+                {days.map(day => (
+                  <th key={day} className="border px-2 py-2">
+                    {day}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {students.map(s => (
+                <tr key={s.id}>
+                  <td className="border px-2 py-2 font-medium">{s.name}</td>
+                  {days.map(day => {
+                    const hasTotalMentoring = hasPlannerSessionForStudentDay(s, day);
+                    const rec = s?.plannerHistory?.[currentPeriodId];
+                    const miss = rec?.attended === false && rec?.missedDay === day;
+                    const carry = rec?.missedCarryOver === true && rec?.missedDay === day;
+                    const manualApplied = rec?.manualApplied === true && rec?.missedDay === day;
+
+                    return (
+                      <td key={`${s.id}-${day}`} className="border px-2 py-2 align-top">
+                        {hasTotalMentoring ? (
+                          <button
+                            className={`rounded px-2 py-0.5 text-sm ${
+                              manualApplied
+                                ? 'bg-green-200'
+                                : carry
+                                ? 'bg-red-200'
+                                : miss
+                                ? 'bg-orange-200'
+                                : 'bg-yellow-100 hover:bg-yellow-200'
+                            }`}
+                            onClick={() => toggleTotalMentoringMissed(s.id, day)}
+                          >
+                            {manualApplied
+                              ? '총괄멘토링(재배정)'
+                              : carry
+                              ? '총괄멘토링(이월)'
+                              : miss
+                              ? '총괄멘토링(누락)'
+                              : '총괄멘토링'}
+                          </button>
+                        ) : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold mb-2">누락 총괄멘토링 사유 및 재배정 관리</h2>
+        <div className="overflow-x-auto border rounded">
+          <table className="w-full border-collapse text-center text-sm">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-2">학생</th>
+                <th className="border px-2 py-2">누락 요일</th>
+                <th className="border px-2 py-2">누락 사유</th>
+                <th className="border px-2 py-2">수동 배정 담당자</th>
+                <th className="border px-2 py-2">재진행 날짜</th>
+                <th className="border px-2 py-2">적용</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missedTotalMentoringRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="border px-2 py-4 text-gray-500">
+                    누락된 총괄멘토링이 없습니다.
+                  </td>
+                </tr>
+              ) : (
+                missedTotalMentoringRows.map(row => (
+                  <tr key={`planner-missed-${row.studentId}`}>
+                    <td className="border px-2 py-2 font-medium">{row.studentName}</td>
+                    <td className="border px-2 py-2">{row.missedDay || '-'}</td>
+                    <td className="border px-2 py-2 min-w-[220px]">
+                      <input
+                        className="border rounded px-2 py-1 w-full"
+                        placeholder="예: 학생 컨디션 저하"
+                        value={row.missedReason}
+                        onChange={e =>
+                          updateMissedTotalMentoringMeta(row.studentId, {
+                            missedReason: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="border px-2 py-2 min-w-[170px]">
+                      <input
+                        className="border rounded px-2 py-1 w-full"
+                        placeholder="담당자 이름 입력"
+                        value={row.manualManager}
+                        onChange={e =>
+                          updateMissedTotalMentoringMeta(row.studentId, {
+                            manualManager: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="border px-2 py-2 min-w-[160px]">
+                      <input
+                        className="border rounded px-2 py-1 w-full"
+                        type="date"
+                        value={row.rescheduleDate}
+                        onChange={e =>
+                          updateMissedTotalMentoringMeta(row.studentId, {
+                            rescheduleDate: e.target.value,
+                          })
+                        }
+                      />
+                    </td>
+                    <td className="border px-2 py-2">
+                      <button
+                        className="bg-blue-600 text-white px-2 py-1 rounded text-xs"
+                        onClick={() =>
+                          applyManualTotalMentoringReassign(
+                            row.studentId,
+                            row.manualManager,
+                            row.missedDay
+                          )
+                        }
+                      >
+                        수동 배정 적용
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          수동 배정 적용 시 해당 학생의 총괄멘토링 누락 건에 재배정 정보가 저장됩니다.
+        </div>
       </div>
 
       {/* Student summary cards */}
