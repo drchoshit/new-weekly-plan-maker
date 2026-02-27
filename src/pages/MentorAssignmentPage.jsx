@@ -1092,7 +1092,6 @@ export default function MentorAssignmentPage() {
         <div className="text-xs text-gray-600 mb-2">
           색상 의미: <span className="px-1 bg-green-100 rounded">녹색</span> 누락 후 재배정 완료,{" "}
           <span className="px-1 bg-red-100 rounded">빨강</span> 멘토링 이월,{" "}
-          <span className="px-1 bg-orange-100 rounded">주황</span> 멘토링 누락
         </div>
         <div className="overflow-x-auto border rounded">
           <table className="w-full border-collapse text-center text-sm">
