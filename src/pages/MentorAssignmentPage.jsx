@@ -721,7 +721,7 @@ export default function MentorAssignmentPage() {
         </button>
       </div>
 
-      <div className="overflow-x-auto border rounded">
+      <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
         <table className="w-full border-collapse text-center">
           <thead className="bg-gray-100">
             <tr>
@@ -813,7 +813,7 @@ export default function MentorAssignmentPage() {
         </table>
       </div>
 
-      <div className="overflow-x-auto border rounded">
+      <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
         <table className="w-full border-collapse text-center">
           <thead className="bg-gray-100">
             <tr>
@@ -929,7 +929,7 @@ export default function MentorAssignmentPage() {
 
       <div>
         <h2 className="text-xl font-semibold mb-2">이번주 멘토링 누락 선택</h2>
-        <div className="overflow-x-auto border rounded">
+        <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
           <table className="w-full border-collapse text-center">
             <thead className="bg-gray-100">
               <tr>
@@ -998,7 +998,7 @@ export default function MentorAssignmentPage() {
 
       <div>
         <h2 className="text-xl font-semibold mb-2">누락 멘토링 사유 및 재배정 관리</h2>
-        <div className="overflow-x-auto border rounded">
+        <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
           <table className="w-full border-collapse text-center text-sm">
             <thead className="bg-gray-100">
               <tr>
@@ -1163,5 +1163,4 @@ export default function MentorAssignmentPage() {
     </div>
   );
 }
-
 

@@ -77,39 +77,41 @@ export default function StudentMentorOverlapTable() {
         학생별 멘토 근무시간 겹침 여부 (주차 기준)
       </h2>
 
-      <table className="w-full table-auto border text-sm">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="border px-2 py-1">학생</th>
-            {days.map((day) => (
-              <th key={day} className="border px-2 py-1">
-                {day}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {students.map((student) => {
-            const result = checkOverlapByStudent(student);
+      <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
+        <table className="w-full table-auto border text-sm">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="border px-2 py-1">학생</th>
+              {days.map((day) => (
+                <th key={day} className="border px-2 py-1">
+                  {day}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {students.map((student) => {
+              const result = checkOverlapByStudent(student);
 
-            return (
-              <tr key={student.id}>
-                <td className="border px-2 py-1 font-semibold">
-                  {student.name}
-                </td>
-                {days.map((day) => (
-                  <td
-                    key={day}
-                    className="border px-2 py-1 text-center"
-                  >
-                    {result[day]}
+              return (
+                <tr key={student.id}>
+                  <td className="border px-2 py-1 font-semibold">
+                    {student.name}
                   </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  {days.map((day) => (
+                    <td
+                      key={day}
+                      className="border px-2 py-1 text-center"
+                    >
+                      {result[day]}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
