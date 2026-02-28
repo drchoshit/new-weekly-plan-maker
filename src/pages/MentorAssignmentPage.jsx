@@ -172,6 +172,46 @@ export default function MentorAssignmentPage() {
     (assignments || []).forEach(a => m.set(a.studentId, a));
     return m;
   }, [assignments]);
+  const isMentoringOptOut = student => student?.mentoringOptOut === true;
+  const emptyAssignment = studentId => ({
+    studentId,
+    first: "",
+    second: "",
+    third: "",
+    fourth: "",
+    fifth: "",
+    days: { first: "", second: "", third: "", fourth: "", fifth: "" },
+    reasons: {
+      first: "후보 없음",
+      second: "후보 없음",
+      third: "후보 없음",
+      fourth: "후보 없음",
+      fifth: "후보 없음",
+    },
+  });
+  const clearCurrentMentoring = student => {
+    const old = { ...(student?.mentorHistory?.[selectedPeriod] || {}) };
+    delete old.mentor;
+    delete old.day;
+    delete old.autoRank;
+    delete old.actualMentor;
+    delete old.attended;
+    delete old.missedCarryOver;
+    delete old.missedDay;
+    delete old.manualApplied;
+    delete old.manualMentor;
+    delete old.rescheduleDate;
+    delete old.rescheduleDay;
+    return {
+      ...student,
+      selectedMentor: "",
+      selectedMentorDay: "",
+      mentorHistory: {
+        ...(student.mentorHistory || {}),
+        [selectedPeriod]: old,
+      },
+    };
+  };
 
   const prevRecord = student => {
     if (!prevPeriodId) return null;
@@ -179,8 +219,10 @@ export default function MentorAssignmentPage() {
     return r?.mentor ? { mentor: n(r.mentor), day: n(r.day) || null } : null;
   };
   const activeMentor = student =>
-    n(student?.mentorHistory?.[selectedPeriod]?.actualMentor) ||
-    n(student?.mentorHistory?.[selectedPeriod]?.mentor);
+    isMentoringOptOut(student)
+      ? ""
+      : n(student?.mentorHistory?.[selectedPeriod]?.actualMentor) ||
+        n(student?.mentorHistory?.[selectedPeriod]?.mentor);
 
   const resolveFixedMentorDay = student => {
     const fixedMentor = n(student?.fixedMentor);
@@ -215,6 +257,7 @@ export default function MentorAssignmentPage() {
   };
 
   const buildCandidates = student => {
+    if (isMentoringOptOut(student)) return [];
     const excluded = new Set(
       [student?.bannedMentor1, student?.bannedMentor2]
         .filter(Boolean)
@@ -330,13 +373,36 @@ export default function MentorAssignmentPage() {
       : "배정된 멘토 없음";
   };
 
+  const toggleMentoringOptOut = (studentId, checked) => {
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+        const next = { ...s, mentoringOptOut: checked };
+        if (!checked) return next;
+        if (!selectedPeriod) {
+          return { ...next, selectedMentor: "", selectedMentorDay: "" };
+        }
+        return clearCurrentMentoring(next);
+      })
+    );
+
+    if (checked) {
+      setAssignments(prev =>
+        (prev || []).map(a => (a.studentId === studentId ? emptyAssignment(studentId) : a))
+      );
+    }
+  };
+
   const autoAssign = () => {
     if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
+    const assignableStudents = students.filter(s => !isMentoringOptOut(s));
     const byStudent = {};
-    students.forEach(s => {
+    assignableStudents.forEach(s => {
       byStudent[s.id] = buildCandidates(s);
     });
-    const order = [...students].sort((a, b) => (byStudent[a.id].length || 0) - (byStudent[b.id].length || 0));
+    const order = [...assignableStudents].sort(
+      (a, b) => (byStudent[a.id].length || 0) - (byStudent[b.id].length || 0)
+    );
     const loads = {};
     const pick = {};
 
@@ -354,6 +420,7 @@ export default function MentorAssignmentPage() {
 
     setAssignments(
       students.map(s => {
+        if (isMentoringOptOut(s)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
         return {
           studentId: s.id,
@@ -380,31 +447,15 @@ export default function MentorAssignmentPage() {
       })
     );
 
-      setStudents(prev =>
-        prev.map(s => {
-          const chosen = pick[s.id]?.chosen;
-          if (!chosen) {
-            const old = { ...(s?.mentorHistory?.[selectedPeriod] || {}) };
-            delete old.mentor;
-            delete old.day;
-            delete old.autoRank;
-            delete old.actualMentor;
-            delete old.attended;
-            delete old.missedCarryOver;
-            delete old.missedDay;
-            return {
-              ...s,
-              selectedMentor: "",
-              selectedMentorDay: "",
-              mentorHistory: {
-                ...(s.mentorHistory || {}),
-                [selectedPeriod]: old,
-              },
-            };
-          }
-          const old = s?.mentorHistory?.[selectedPeriod] || {};
-          return {
-            ...s,
+    setStudents(prev =>
+      prev.map(s => {
+        if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
+        const chosen = pick[s.id]?.chosen;
+        if (!chosen) return clearCurrentMentoring(s);
+
+        const old = s?.mentorHistory?.[selectedPeriod] || {};
+        return {
+          ...s,
           selectedMentor: chosen.mentor,
           selectedMentorDay: chosen.day,
           initialMentor: s?.initialMentor?.mentor
@@ -433,11 +484,20 @@ export default function MentorAssignmentPage() {
       .join("\n");
     setPopup({
       title: "자동 배정 완료",
-      text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${students.length}\n최대 인원: ${maxPerMentor}명\n\n${lines || "배정 없음"}`,
+      text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
+        students.length - assignableStudents.length
+      }명\n최대 인원: ${maxPerMentor}명\n\n${lines || "배정 없음"}`,
     });
   };
 
   const pickRank = (student, key) => {
+    if (isMentoringOptOut(student)) {
+      setPopup({
+        title: "멘토링 미희망",
+        text: `${student.name}: 멘토링 미희망 인원으로 설정되어 수동 선택이 비활성화됩니다.`,
+      });
+      return;
+    }
     const row = aMap.get(student.id);
     const mentor = n(row?.[key]);
     const day = n(row?.days?.[key]);
@@ -466,6 +526,13 @@ export default function MentorAssignmentPage() {
   };
 
   const verify = student => {
+    if (isMentoringOptOut(student)) {
+      setPopup({
+        title: `검증 결과 - ${student.name}`,
+        text: "멘토링 미희망 인원으로 설정되어 검증 대상에서 제외됩니다.",
+      });
+      return;
+    }
     const mentor = activeMentor(student);
     if (!mentor || !selectedPeriod) {
       setPopup({ title: "검증 결과", text: `${student.name}: 선택 멘토가 없습니다.` });
@@ -552,6 +619,10 @@ export default function MentorAssignmentPage() {
   const fixedMentorConflict = useMemo(() => {
     const map = {};
     students.forEach(student => {
+      if (isMentoringOptOut(student)) {
+        map[student.id] = false;
+        return;
+      }
       const fixed = n(student?.fixedMentor);
       if (!fixed) {
         map[student.id] = false;
@@ -578,6 +649,7 @@ export default function MentorAssignmentPage() {
     () =>
       students
         .map(s => {
+          if (isMentoringOptOut(s)) return null;
           const rec = s?.mentorHistory?.[selectedPeriod];
           if (!rec || rec.attended !== false || !rec.missedDay) return null;
           return {
@@ -656,6 +728,7 @@ export default function MentorAssignmentPage() {
     setStudents(prev =>
       prev.map(s => {
         if (s.id !== studentId || !selectedPeriod) return s;
+        if (isMentoringOptOut(s)) return s;
         const h = { ...(s.mentorHistory || {}) };
         const rec = { ...(h[selectedPeriod] || {}) };
         rec.mentor = rec.mentor || n(s.selectedMentor);
@@ -703,6 +776,25 @@ export default function MentorAssignmentPage() {
         </div>
       </div>
 
+      <div className="border rounded p-3 bg-white">
+        <div className="font-semibold mb-2">멘토링 미희망 인원 선택</div>
+        <div className="flex flex-wrap gap-3">
+          {students.map(s => (
+            <label key={`mentoring-optout-${s.id}`} className="inline-flex items-center gap-1 text-sm">
+              <input
+                type="checkbox"
+                checked={Boolean(s?.mentoringOptOut)}
+                onChange={e => toggleMentoringOptOut(s.id, e.target.checked)}
+              />
+              <span>{s.name}</span>
+            </label>
+          ))}
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          선택된 학생은 멘토링 자동/수동 배정에서 제외됩니다.
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm font-medium">멘토 1명 당 최대 학생 수</label>
         <select
@@ -725,18 +817,18 @@ export default function MentorAssignmentPage() {
         <table className="w-full border-collapse text-center">
           <thead className="bg-gray-100">
             <tr>
-              <th className="border p-2">이름</th>
-              <th className="border p-2">태어난 해</th>
-              <th className="border p-2">성격</th>
-              <th className="border p-2">국어</th>
-              <th className="border p-2">수학</th>
-              <th className="border p-2">탐구1</th>
-              <th className="border p-2">탐구2</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">이름</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">태어난 해</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">성격</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">국어</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">수학</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">탐구1</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">탐구2</th>
             </tr>
           </thead>
           <tbody>
             {students.map(s => (
-              <tr key={s.id}>
+              <tr key={s.id} className={isMentoringOptOut(s) ? "opacity-40 bg-gray-50" : ""}>
                 <td className="border p-2">{s.name}</td>
                 <td className="border p-2">
                   <input
@@ -817,18 +909,18 @@ export default function MentorAssignmentPage() {
         <table className="w-full border-collapse text-center">
           <thead className="bg-gray-100">
             <tr>
-              <th className="border p-2">이름</th>
-              <th className="border p-2">고정멘토</th>
-              <th className="border p-2">멘토 배제</th>
-              <th className="border p-2">지난주 멘토</th>
-              <th className="border p-2">지난주 요일</th>
-              <th className="border p-2 bg-blue-100">선택 멘토</th>
-              <th className="border p-2">1순위</th>
-              <th className="border p-2">2순위</th>
-              <th className="border p-2">3순위</th>
-              <th className="border p-2">4순위</th>
-              <th className="border p-2">5순위</th>
-              <th className="border p-2">검증</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">이름</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">고정멘토</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">멘토 배제</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 멘토</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 요일</th>
+              <th className="border p-2 bg-blue-100 sticky top-0 z-20">선택 멘토</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">1순위</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">2순위</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">3순위</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">4순위</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">5순위</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">검증</th>
             </tr>
           </thead>
           <tbody>
@@ -838,8 +930,9 @@ export default function MentorAssignmentPage() {
               const currentMentor = activeMentor(s);
               const currentMentorDay =
                 n(s?.mentorHistory?.[selectedPeriod]?.day) || n(s?.selectedMentorDay);
+              const dimClass = isMentoringOptOut(s) ? "opacity-40 bg-gray-50" : "";
               return (
-                <tr key={s.id} className={fixedMentorConflict[s.id] ? "bg-red-50" : ""}>
+                <tr key={s.id} className={`${fixedMentorConflict[s.id] ? "bg-red-50" : ""} ${dimClass}`.trim()}>
                   <td className="border p-2 font-medium">{s.name}</td>
                   <td className="border p-2">
                     <input
@@ -869,6 +962,8 @@ export default function MentorAssignmentPage() {
                   <td className="border p-2">
                     {currentMentor ? (
                       mentorCell(currentMentor, currentMentorDay)
+                    ) : isMentoringOptOut(s) ? (
+                      <span className="text-gray-500 text-sm">미희망</span>
                     ) : (
                       <span className="text-red-500 text-sm">미배정</span>
                     )}
@@ -933,9 +1028,9 @@ export default function MentorAssignmentPage() {
           <table className="w-full border-collapse text-center">
             <thead className="bg-gray-100">
               <tr>
-                <th className="border px-2 py-2">학생</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">학생</th>
                 {DAYS.map(day => (
-                  <th key={day} className="border px-2 py-2">
+                  <th key={day} className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">
                     {day}
                   </th>
                 ))}
@@ -943,7 +1038,7 @@ export default function MentorAssignmentPage() {
             </thead>
             <tbody>
               {students.map(s => (
-                <tr key={s.id}>
+                <tr key={s.id} className={isMentoringOptOut(s) ? "opacity-40 bg-gray-50" : ""}>
                   <td className="border px-2 py-2 font-medium">{s.name}</td>
                   {DAYS.map(day => {
                     const mentor = activeMentor(s);
@@ -1002,13 +1097,13 @@ export default function MentorAssignmentPage() {
           <table className="w-full border-collapse text-center text-sm">
             <thead className="bg-gray-100">
               <tr>
-                <th className="border px-2 py-2">학생</th>
-                <th className="border px-2 py-2">누락 멘토</th>
-                <th className="border px-2 py-2">누락 요일</th>
-                <th className="border px-2 py-2">누락 사유</th>
-                <th className="border px-2 py-2">수동 배정 멘토</th>
-                <th className="border px-2 py-2">재진행 날짜</th>
-                <th className="border px-2 py-2">적용</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">학생</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">누락 멘토</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">누락 요일</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">누락 사유</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">수동 배정 멘토</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">재진행 날짜</th>
+                <th className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">적용</th>
               </tr>
             </thead>
             <tbody>
@@ -1093,13 +1188,13 @@ export default function MentorAssignmentPage() {
           색상 의미: <span className="px-1 bg-green-100 rounded">녹색</span> 누락 후 재배정 완료,{" "}
           <span className="px-1 bg-red-100 rounded">빨강</span> 멘토링 이월,{" "}
         </div>
-        <div className="overflow-x-auto border rounded">
+        <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
           <table className="w-full border-collapse text-center text-sm">
             <thead className="bg-gray-100">
               <tr>
-                <th className="border px-2 py-2 sticky left-0 bg-gray-100 z-10">학생</th>
+                <th className="border px-2 py-2 sticky top-0 left-0 bg-gray-100 z-30">학생</th>
                 {pList.map(p => (
-                  <th key={p.id} className="border px-2 py-2">
+                  <th key={p.id} className="border px-2 py-2 sticky top-0 bg-gray-100 z-20">
                     {p.id}
                   </th>
                 ))}
@@ -1107,7 +1202,7 @@ export default function MentorAssignmentPage() {
             </thead>
             <tbody>
               {students.map(s => (
-                <tr key={s.id}>
+                <tr key={s.id} className={isMentoringOptOut(s) ? "opacity-40 bg-gray-50" : ""}>
                   <td className="border px-2 py-2 font-medium sticky left-0 bg-white z-10">{s.name}</td>
                   {pList.map(p => {
                     const r = s?.mentorHistory?.[p.id];
@@ -1163,4 +1258,3 @@ export default function MentorAssignmentPage() {
     </div>
   );
 }
-

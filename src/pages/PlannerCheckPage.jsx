@@ -101,6 +101,39 @@ export default function PlannerCheckPage() {
 
   const [searchText, setSearchText] = useState('');
   const [useMentoringDistance, setUseMentoringDistance] = useState(false); // ✅ 추가
+  const isPlannerOptOut = student => student?.plannerOptOut === true;
+
+  const togglePlannerOptOut = (studentId, checked) => {
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+        const history = { ...(s.plannerHistory || {}) };
+        if (currentPeriodId) {
+          const rec = { ...(history[currentPeriodId] || {}) };
+          if (checked) {
+            delete rec.attended;
+            delete rec.missedCarryOver;
+            delete rec.missedDay;
+            delete rec.manualApplied;
+          }
+          history[currentPeriodId] = rec;
+        }
+        return { ...s, plannerOptOut: checked, plannerHistory: history };
+      })
+    );
+
+    if (checked) {
+      setScheduleByDay(prev => {
+        const next = { ...(prev || {}) };
+        days.forEach(day => {
+          next[day] = (next[day] || []).filter(
+            slot => String(slot?.studentId) !== String(studentId)
+          );
+        });
+        return next;
+      });
+    }
+  };
 
   // Ensure weeklySessions ∈ [0,7]
   useEffect(() => {
@@ -176,7 +209,7 @@ export default function PlannerCheckPage() {
   }
 
   // ✅ 평가 지표(총 누락 합계, 누락 학생 수, 총 배정 세션 수)
-  function evaluateSchedule(schedule) {
+  function evaluateSchedule(schedule, targetStudents) {
     const countsByStudent = new Map();
     days.forEach(d => {
       (schedule[d] || []).forEach(({ student }) => {
@@ -186,7 +219,7 @@ export default function PlannerCheckPage() {
     let totalMissing = 0;
     let missingStudents = 0;
     let totalAssigned = 0;
-    students.forEach(s => {
+    targetStudents.forEach(s => {
       const need = s.weeklySessions || 0;
       const got = countsByStudent.get(s.name) || 0;
       const miss = Math.max(0, need - got);
@@ -199,6 +232,7 @@ export default function PlannerCheckPage() {
 
   // Generate schedule with per-day constraint (strategy 적용)
   const generatePlannerSchedule = (strategy = null) => {
+    const targetStudents = students.filter(s => !isPlannerOptOut(s));
     // (1) collect all slots
     const allSlots = [];
     const dayOrder = getDayOrderByStrategy(strategy);
@@ -237,7 +271,7 @@ export default function PlannerCheckPage() {
         });
       });
     }
-    const nStudents = students.length;
+    const nStudents = targetStudents.length;
     const nDays = days.length;
     const nSlots = allSlots.length;
     const S = 0;
@@ -257,7 +291,7 @@ export default function PlannerCheckPage() {
     }
 
     // 학생 우선순위(기존 유지)
-    const studentWithTime = students.map((s, i) => {
+    const studentWithTime = targetStudents.map((s, i) => {
       const logs = s.attendance || {};
       const total = Object.values(logs).reduce((sum, [start, end]) => {
         return sum + (timeToMinutes(end) - timeToMinutes(start));
@@ -268,12 +302,12 @@ export default function PlannerCheckPage() {
     // S -> student
     studentWithTime.forEach(({ index: i }) => {
       const u = studentStart + i;
-      const w = students[i].weeklySessions || 0;
+      const w = targetStudents[i].weeklySessions || 0;
       if (w > 0) addEdge(S, u, w);
     });
 
     // ✅ 핵심 수정: student -> student-day 엣지 추가 순서를 전략별 요일 순서로
-    students.forEach((s, i) => {
+    targetStudents.forEach((s, i) => {
       const u = studentStart + i;
 
       let order =
@@ -310,7 +344,7 @@ export default function PlannerCheckPage() {
 
     // student-day -> slot (if eligible)
     // allSlots의 현재 순서가 BFS 순서에 반영됨
-    students.forEach((s, i) => {
+    targetStudents.forEach((s, i) => {
       for (let di = 0; di < nDays; di++) {
 
         // 🔥 실제 출결 구조로 접근
@@ -352,7 +386,7 @@ export default function PlannerCheckPage() {
     // extract assignments
     const schedule = days.reduce((o, d) => ({ ...o, [d]: [] }), {});
     const reasons = [];
-    students.forEach((s, i) => {
+    targetStudents.forEach((s, i) => {
       let assigned = 0;
       for (let j = 0; j < nSlots; j++) {
         const slot = allSlots[j];
@@ -381,7 +415,7 @@ export default function PlannerCheckPage() {
       );
     });
 
-    return { schedule, reasons };
+    return { schedule, reasons, targetStudents };
   };
 
   const generatePlannerScheduleByDistance = () => {
@@ -393,7 +427,9 @@ export default function PlannerCheckPage() {
       "월": [], "화": [], "수": [], "목": [], "금": [], "토": []
     };
 
-    students.forEach(student => {
+    const targetStudents = students.filter(student => !isPlannerOptOut(student));
+
+    targetStudents.forEach(student => {
       const anchorDay = getMentoringAnchorDay({
         student,
         mentorsByDay,
@@ -485,8 +521,8 @@ export default function PlannerCheckPage() {
       let bestName = '';
 
       candidates.forEach(name => {
-        const { schedule, reasons } = generatePlannerSchedule(name);
-        const score = evaluateSchedule(schedule);
+        const { schedule, reasons, targetStudents } = generatePlannerSchedule(name);
+        const score = evaluateSchedule(schedule, targetStudents);
         // 비교: 총 누락 합계 → 누락 학생 수 → 총 배정 세션 수
         if (
           !best ||
@@ -560,8 +596,11 @@ export default function PlannerCheckPage() {
       [d]: (scheduleByDay[d] || []).filter(x => x.student === s.name).length
     }), {});
     const assigned = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (isPlannerOptOut(s)) {
+      return { id: s.id, name: s.name, counts, missing: 0, optOut: true };
+    }
     const need = s.weeklySessions || 0;
-    return { id: s.id, name: s.name, counts, missing: Math.max(0, need - assigned) };
+    return { id: s.id, name: s.name, counts, missing: Math.max(0, need - assigned), optOut: false };
   });
 
   // --- New summary at top ---
@@ -590,6 +629,7 @@ export default function PlannerCheckPage() {
     setStudents(prev =>
       prev.map(s => {
         if (s.id !== studentId || !currentPeriodId) return s;
+        if (isPlannerOptOut(s)) return s;
         const history = { ...(s.plannerHistory || {}) };
         const rec = { ...(history[currentPeriodId] || {}) };
         rec.day = rec.day || day;
@@ -615,6 +655,7 @@ export default function PlannerCheckPage() {
     () =>
       students
         .map(s => {
+          if (isPlannerOptOut(s)) return null;
           const rec = s?.plannerHistory?.[currentPeriodId];
           if (!rec || rec.attended !== false || !rec.missedDay) return null;
           return {
@@ -646,6 +687,10 @@ export default function PlannerCheckPage() {
 
     const target = students.find(s => s.id === studentId);
     if (!target) return;
+    if (isPlannerOptOut(target)) {
+      window.alert('플래너체크 미희망 인원은 수동 재배정 대상이 아닙니다.');
+      return;
+    }
     const rec = target?.plannerHistory?.[currentPeriodId] || {};
     const manualManager = n(managerFromRow) || n(rec.manualManager);
     const rescheduleDate = n(rec.rescheduleDate);
@@ -690,6 +735,25 @@ export default function PlannerCheckPage() {
 
       <h1 className="text-2xl font-bold">플래너 체크 관리</h1>
 
+      <div className="border rounded p-3 bg-white">
+        <div className="font-semibold mb-2">플래너체크 미희망 인원 선택</div>
+        <div className="flex flex-wrap gap-3">
+          {students.map(s => (
+            <label key={`planner-optout-${s.id}`} className="inline-flex items-center gap-1 text-sm">
+              <input
+                type="checkbox"
+                checked={Boolean(s?.plannerOptOut)}
+                onChange={e => togglePlannerOptOut(s.id, e.target.checked)}
+              />
+              <span>{s.name}</span>
+            </label>
+          ))}
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          선택된 학생은 총괄멘토링(플래너 체크) 자동 배정에서 제외됩니다.
+        </div>
+      </div>
+
       {/* Search */}
       <input
         type="text"
@@ -709,7 +773,7 @@ export default function PlannerCheckPage() {
         </thead>
         <tbody>
           {filteredStudents.map(s => (
-            <tr key={s.id}>
+            <tr key={s.id} className={isPlannerOptOut(s) ? 'opacity-40 bg-gray-50' : ''}>
               <td className="border p-2">{s.name}</td>
               <td className="border p-2">
                 <input
@@ -718,6 +782,7 @@ export default function PlannerCheckPage() {
                   max={7}
                   className="w-16 border px-1 py-1 rounded"
                   value={s.weeklySessions}
+                  disabled={isPlannerOptOut(s)}
                   onChange={e =>
                     setStudents(prev =>
                       prev.map(st =>
@@ -881,7 +946,7 @@ export default function PlannerCheckPage() {
             </thead>
             <tbody>
               {students.map(s => (
-                <tr key={s.id}>
+                <tr key={s.id} className={isPlannerOptOut(s) ? 'opacity-40 bg-gray-50' : ''}>
                   <td className="border px-2 py-2 font-medium">{s.name}</td>
                   {days.map(day => {
                     const hasTotalMentoring = hasPlannerSessionForStudentDay(s, day);
@@ -903,9 +968,12 @@ export default function PlannerCheckPage() {
                                 ? 'bg-orange-200'
                                 : 'bg-yellow-100 hover:bg-yellow-200'
                             }`}
+                            disabled={isPlannerOptOut(s)}
                             onClick={() => toggleTotalMentoringMissed(s.id, day)}
                           >
-                            {manualApplied
+                            {isPlannerOptOut(s)
+                              ? '총괄멘토링(미희망)'
+                              : manualApplied
                               ? '총괄멘토링(재배정)'
                               : carry
                               ? '총괄멘토링(이월)'
@@ -1014,8 +1082,8 @@ export default function PlannerCheckPage() {
       {/* Student summary cards */}
       <h2 className="text-xl font-semibold mt-6">학생별 배정 요약</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {summaryData.map(({ id, name, counts, missing }) => (
-          <div key={id} className="border p-4 rounded shadow space-y-1">
+        {summaryData.map(({ id, name, counts, missing, optOut }) => (
+          <div key={id} className={`border p-4 rounded shadow space-y-1 ${optOut ? 'opacity-40 bg-gray-50' : ''}`}>
             <h3 className="font-bold">{name}</h3>
             <ul className="text-sm">
               {days.map(d => (
@@ -1024,7 +1092,9 @@ export default function PlannerCheckPage() {
                 </li>
               ))}
             </ul>
-            {missing > 0 ? (
+            {optOut ? (
+              <div className="text-gray-600">미희망(배정 제외)</div>
+            ) : missing > 0 ? (
               <div className="text-red-600">누락: {missing}회</div>
             ) : (
               <div className="text-green-600">완료</div>

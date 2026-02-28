@@ -81,9 +81,9 @@ export default function StudentMentorOverlapTable() {
         <table className="w-full table-auto border text-sm">
           <thead>
             <tr className="bg-gray-100">
-              <th className="border px-2 py-1">학생</th>
+              <th className="border px-2 py-1 sticky top-0 bg-gray-100 z-20">학생</th>
               {days.map((day) => (
-                <th key={day} className="border px-2 py-1">
+                <th key={day} className="border px-2 py-1 sticky top-0 bg-gray-100 z-20">
                   {day}
                 </th>
               ))}
@@ -91,10 +91,11 @@ export default function StudentMentorOverlapTable() {
           </thead>
           <tbody>
             {students.map((student) => {
+              const isOptOut = student?.mentoringOptOut === true;
               const result = checkOverlapByStudent(student);
 
               return (
-                <tr key={student.id}>
+                <tr key={student.id} className={isOptOut ? "opacity-40 bg-gray-50" : ""}>
                   <td className="border px-2 py-1 font-semibold">
                     {student.name}
                   </td>
@@ -103,7 +104,7 @@ export default function StudentMentorOverlapTable() {
                       key={day}
                       className="border px-2 py-1 text-center"
                     >
-                      {result[day]}
+                      {isOptOut ? "-" : result[day]}
                     </td>
                   ))}
                 </tr>
