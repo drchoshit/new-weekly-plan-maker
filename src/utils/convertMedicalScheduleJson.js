@@ -84,6 +84,7 @@ export default function convertMedicalScheduleJson(json) {
   if (!sourceRows.length) return result;
 
   const idToName = new Map();
+  const nameCounts = new Map();
   students.forEach(s => {
     if (!s) return;
     const id = normalizeText(s.id);
@@ -91,7 +92,11 @@ export default function convertMedicalScheduleJson(json) {
     if (id && name) {
       idToName.set(id, name);
     }
+    if (name) {
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+    }
   });
+  const isUniqueName = name => Boolean(name) && nameCounts.get(name) === 1;
 
   const metaWeekStart =
     json?.meta?.weekStartYmd ||
@@ -166,11 +171,22 @@ export default function convertMedicalScheduleJson(json) {
     const studentName = normalizeText(
       sc.name || sc.student_name || sc.studentName || (studentId && idToName.get(studentId)) || ""
     );
-    const studentKey = studentId || studentName;
-    if (!studentKey) return;
+    const canonicalStudentKey = studentId || studentName;
+    if (!canonicalStudentKey) return;
 
-    const studentBucket = ensureStudentBucket(weekBucket, studentKey);
+    const studentBucket = ensureStudentBucket(weekBucket, canonicalStudentKey);
     if (!studentBucket) return;
+
+    // Add aliases so render logic can match by either id or name.
+    const aliasKeys = new Set([studentId, studentName].map(normalizeText).filter(Boolean));
+    if (studentName && !isUniqueName(studentName)) {
+      // Avoid accidental merge when duplicate names exist.
+      aliasKeys.delete(studentName);
+    }
+    aliasKeys.forEach(aliasKey => {
+      if (!aliasKey) return;
+      weekBucket[aliasKey] = studentBucket;
+    });
 
     const rawDay = normalizeText(sc.day);
     const day = DAY_SET.has(rawDay) ? rawDay : dayFromDateValue(sc.start);
@@ -179,7 +195,7 @@ export default function convertMedicalScheduleJson(json) {
     const text = buildItemText(sc.start, sc.end, sc.type, sc.description);
     if (!text) return;
 
-    const dedupeMapKey = `${studentKey}|${day}`;
+    const dedupeMapKey = `${canonicalStudentKey}|${day}`;
     const sig = [
       normalizeTime(sc.start),
       normalizeTime(sc.end),
@@ -198,9 +214,13 @@ export default function convertMedicalScheduleJson(json) {
   });
 
   // Keep empty buckets for all students so "no schedule" students still render instead of disappearing.
-  const allStudentKeys = students
-    .map(s => normalizeText(s?.id) || normalizeText(s?.name))
-    .filter(Boolean);
+  const allStudentKeys = [];
+  students.forEach(s => {
+    const id = normalizeText(s?.id);
+    const name = normalizeText(s?.name);
+    if (id) allStudentKeys.push(id);
+    if (isUniqueName(name)) allStudentKeys.push(name);
+  });
   const weekBuckets = [...new Set(Object.values(result))];
   weekBuckets.forEach(weekBucket => {
     allStudentKeys.forEach(studentKey => {
