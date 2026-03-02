@@ -525,6 +525,52 @@ export default function MentorAssignmentPage() {
     });
   };
 
+  const applyFixedMentorToSelection = student => {
+    if (!selectedPeriod) {
+      window.alert("기준 주차를 먼저 선택해 주세요.");
+      return;
+    }
+    if (isMentoringOptOut(student)) {
+      setPopup({
+        title: "멘토링 미희망",
+        text: `${student.name}: 멘토링 미희망 인원으로 설정되어 고정멘토 적용이 비활성화됩니다.`,
+      });
+      return;
+    }
+
+    const fixed = n(student?.fixedMentor);
+    if (!fixed) {
+      setPopup({
+        title: "고정멘토 적용",
+        text: `${student.name}: 고정멘토를 먼저 입력해 주세요.`,
+      });
+      return;
+    }
+
+    const day = resolveFixedMentorDay(student);
+    commitMentor(student, fixed, day);
+    const next = students.map(s =>
+      s.id === student.id
+        ? {
+            ...s,
+            selectedMentor: fixed,
+            mentorHistory: {
+              ...(s.mentorHistory || {}),
+              [selectedPeriod]: {
+                ...(s.mentorHistory?.[selectedPeriod] || {}),
+                mentor: fixed,
+                day,
+              },
+            },
+          }
+        : s
+    );
+    setPopup({
+      title: `${student.name} 고정멘토 적용`,
+      text: `${student.name} -> ${fixed}\n선택 요일: ${day || "미지정"}\n\n${loadText(next)}`,
+    });
+  };
+
   const verify = student => {
     if (isMentoringOptOut(student)) {
       setPopup({
@@ -935,15 +981,25 @@ export default function MentorAssignmentPage() {
                 <tr key={s.id} className={`${fixedMentorConflict[s.id] ? "bg-red-50" : ""} ${dimClass}`.trim()}>
                   <td className="border p-2 font-medium">{s.name}</td>
                   <td className="border p-2">
-                    <input
-                      className="border rounded px-2 py-1 w-28"
-                      value={s.fixedMentor || ""}
-                      onChange={e =>
-                        setStudents(prev =>
-                          prev.map(x => (x.id === s.id ? { ...x, fixedMentor: e.target.value } : x))
-                        )
-                      }
-                    />
+                    <div className="flex items-center justify-center gap-2">
+                      <input
+                        className="border rounded px-2 py-1 w-28"
+                        value={s.fixedMentor || ""}
+                        onChange={e =>
+                          setStudents(prev =>
+                            prev.map(x => (x.id === s.id ? { ...x, fixedMentor: e.target.value } : x))
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="bg-blue-600 text-white text-xs px-2 py-1 rounded disabled:opacity-40"
+                        onClick={() => applyFixedMentorToSelection(s)}
+                        disabled={!n(s.fixedMentor) || !selectedPeriod || isMentoringOptOut(s)}
+                      >
+                        적용
+                      </button>
+                    </div>
                   </td>
                   <td className="border p-2">
                     <input
