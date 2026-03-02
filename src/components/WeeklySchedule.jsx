@@ -544,6 +544,49 @@ export default function WeeklySchedule({
     return `${d.getMonth() + 1}/${d.getDate()}`;
   };
 
+  const normalizePeriodToken = (value) => String(value ?? "").replace(/\s/g, "");
+
+  const toMonthDayRangeToken = (value) => {
+    const token = normalizePeriodToken(value);
+    if (!token) return "";
+
+    const iso = token.match(/^(\d{4})-(\d{2})-(\d{2})~(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) {
+      return `${Number(iso[2])}/${Number(iso[3])}~${Number(iso[5])}/${Number(iso[6])}`;
+    }
+
+    const md = token.match(/^(\d{1,2})\/(\d{1,2})~(\d{1,2})\/(\d{1,2})$/);
+    if (md) {
+      return `${Number(md[1])}/${Number(md[2])}~${Number(md[3])}/${Number(md[4])}`;
+    }
+
+    return "";
+  };
+
+  const matchPeriodKey = (targetPeriod, candidateKey) => {
+    const targetNorm = normalizePeriodToken(targetPeriod);
+    const candidateNorm = normalizePeriodToken(candidateKey);
+    if (!targetNorm || !candidateNorm) return false;
+
+    if (
+      candidateNorm === targetNorm ||
+      candidateNorm.includes(targetNorm) ||
+      targetNorm.includes(candidateNorm)
+    ) {
+      return true;
+    }
+
+    const targetMd = toMonthDayRangeToken(targetNorm);
+    const candidateMd = toMonthDayRangeToken(candidateNorm);
+    if (!targetMd || !candidateMd) return false;
+
+    return (
+      candidateMd === targetMd ||
+      candidateMd.includes(targetMd) ||
+      targetMd.includes(candidateMd)
+    );
+  };
+
   const renderStudentCalendar = (studentId) => {
     if (!weeklyCalendars) {
       console.warn("❌ weeklyCalendars 없음");
@@ -551,13 +594,11 @@ export default function WeeklySchedule({
     }
 
     const periodKeys = Object.keys(weeklyCalendars);
-    // 🔥 selectedPeriod와 가장 "유사한" key 찾기
+    const periodFromDateInputs = `${(startDate || "").trim()}~${(endDate || "").trim()}`;
     const periodKey =
-      Object.keys(weeklyCalendars).find(k =>
-        k.replace(/\s/g, "").includes(
-          selectedPeriod.replace(/\s/g, "")
-        )
-      ) || Object.keys(weeklyCalendars).slice(-1)[0];
+      periodKeys.find(k => matchPeriodKey(selectedPeriod, k)) ||
+      periodKeys.find(k => matchPeriodKey(periodFromDateInputs, k)) ||
+      periodKeys.slice(-1)[0];
 
     if (!periodKey) {
       console.warn("❌ periodKey 없음", selectedPeriod);
@@ -567,15 +608,25 @@ export default function WeeklySchedule({
     const student = students.find(s => String(s.id) === String(studentId));
     if (!student) return null;
 
-    const cal =
-      weeklyCalendars[periodKey]?.[student.id] ||
-      weeklyCalendars[periodKey]?.[student.name];
+    const periodCalendar = weeklyCalendars[periodKey] || {};
+    const studentIdKey = String(student.id ?? "").trim();
+    const studentNameKey = String(student.name ?? "").trim();
+
+    let cal = periodCalendar[studentIdKey] || periodCalendar[studentNameKey];
+    if (!cal) {
+      const fuzzyKey = Object.keys(periodCalendar).find(
+        key => key.trim() === studentIdKey || key.trim() === studentNameKey
+      );
+      if (fuzzyKey) {
+        cal = periodCalendar[fuzzyKey];
+      }
+    }
 
     if (!cal) {
       console.warn("❌ 학생 캘린더 없음", {
         periodKey,
-        studentId: student.id,
-        availableStudents: Object.keys(weeklyCalendars[periodKey] || {})
+        studentId: studentIdKey,
+        availableStudents: Object.keys(periodCalendar)
       });
       return null;
     }
