@@ -111,6 +111,16 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
     }
   });
+  const [clinicMentorsByDay, setClinicMentorsByDay] = useState(() => {
+    try {
+      const saved = localStorage.getItem("clinicMentorsByDay");
+      return saved
+        ? JSON.parse(saved)
+        : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+    } catch {
+      return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+    }
+  });
 
   // 🔥 [신규] 플래너 체크 결과 (읽기 전용 공유용)
   const [plannerScheduleByDay, setPlannerScheduleByDay] = useState(() => {
@@ -409,6 +419,9 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   useEffect(() => {
     localStorage.setItem("mentorsByDay", JSON.stringify(mentorsByDay));
   }, [mentorsByDay]);
+  useEffect(() => {
+    localStorage.setItem("clinicMentorsByDay", JSON.stringify(clinicMentorsByDay));
+  }, [clinicMentorsByDay]);
 
   useEffect(() => {
     localStorage.setItem("plannerMessage", plannerMessage);
@@ -521,6 +534,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const getAllState = () => ({
     students,
     mentorsByDay,
+    clinicMentorsByDay,
     plannerMessage,
     noticeMessage,
     monthlyNotice,
@@ -558,6 +572,10 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     if ("mentorsByDay" in data)
       setMentorsByDay(
         data.mentorsByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
+      );
+    if ("clinicMentorsByDay" in data)
+      setClinicMentorsByDay(
+        data.clinicMentorsByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
       );
     if ("plannerMessage" in data) setPlannerMessage(data.plannerMessage ?? "");
     if ("noticeMessage" in data) setNoticeMessage(data.noticeMessage ?? "");
@@ -816,6 +834,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     hasHydrated,
     students,
     mentorsByDay,
+    clinicMentorsByDay,
     plannerMessage,
     noticeMessage,
     monthlyNotice,
@@ -847,6 +866,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       value={{
         students, setStudents,
         mentorsByDay, setMentorsByDay,
+        clinicMentorsByDay, setClinicMentorsByDay,
         plannerMessage, setPlannerMessage,
         noticeMessage, setNoticeMessage,
         monthlyNotice, setMonthlyNotice,

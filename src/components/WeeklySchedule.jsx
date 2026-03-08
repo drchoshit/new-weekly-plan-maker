@@ -55,7 +55,6 @@ export default function WeeklySchedule({
   const [printOpts, setPrintOpts]     = useState({
     header:     { label: '헤더',       enabled: true },
     mentors:    { label: '멘토표',     enabled: true },
-    planner:    { label: '플래너체크', enabled: true },
     mentalCare: { label: '멘탈케어',   enabled: true }, // (요청에 따라 아래 렌더링은 숨김)
     interview:  { label: '인터뷰',     enabled: true },
     notices:    { label: '공지사항',   enabled: true },
@@ -823,111 +822,58 @@ export default function WeeklySchedule({
         {/* 멘탈 케어링은 요청에 따라 '숨김' 처리 (렌더하지 않음) */}
         {/* {printOpts.mentalCare.enabled && ( ... )}  → 제거 */}
 
-        {/* 🔥 플래너 체크 + 인터뷰 한 줄 배치 */}
-        <div className="grid grid-cols-3 gap-4">
+        {/* 금주의 멘토 + 부원장 인터뷰 */}
+        {printOpts.interview.enabled && (
+          <div className="grid grid-cols-2 gap-2">
 
-          {/* 왼쪽 2칸 : 플래너 체크 */}
-          <div className="col-span-2">
-            {printOpts.planner.enabled && (
-              <div className="border border-print-line rounded-sm p-3 bg-white h-full flex flex-col justify-between">
-                <h3 className="font-semibold mb-1 text-center">플래너 체크</h3>
+            {/* 금주의 멘토 */}
+            <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
+              <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
 
-                <table className="w-full table-fixed border-collapse text-center text-sm">
-                  <thead>
-                    <tr className="bg-josun-soft">
-                      {days.map((d, i) => (
-                        <th key={i} className="border p-1">{d}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      {days.map((d, i) => (
-                        <td key={i} className="border p-1">
-                          <input
-                            value={(ov.plannerTimes?.[d] ?? plannerTimesByDay[d])}
-                            onChange={(e) =>
-                              updatePlannerTimeOverride(student.id, d, e.target.value)
-                            }
-                            className="border w-full text-center"
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
-
-                {false && (
-                  <div className="mt-1 text-left text-sm flex items-center gap-2">
-                    <span className="whitespace-nowrap">※ 플래너 체크 문구:</span>
-                    <input
-                      value={ov.planner ?? plannerMessage}
-                      onChange={(e) =>
-                        updatePlannerOverride(student.id, e.target.value)
-                      }
-                      className="flex-1 border rounded px-2 py-1 w-full"
-                    />
-                  </div>
-                )}
+              <div className="text-sm text-center font-medium mb-1">
+                {mentorDayLabel}
               </div>
-            )}
+
+              <input
+                value={ov.mentorOfWeek ?? mentorName}
+                onChange={(e) =>
+                  updateMentorOverride(student.id, e.target.value)
+                }
+                className="border w-full text-center font-semibold flex items-center justify-center"
+              />
+            </div>
+
+            {/* 부원장 인터뷰 */}
+            <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
+              <h3 className="font-semibold mb-1 text-center">부원장 인터뷰</h3>
+
+              <input
+                placeholder="요일"
+                value={ov.viceDirector?.day ?? selectedInterview?.day ?? ''}
+                onChange={(e) =>
+                  updateInterviewField(student.id, 'day', e.target.value)
+                }
+                className="border w-full mb-1 text-center"
+              />
+
+              <input
+                placeholder="시간"
+                value={
+                  ov.viceDirector?.time ??
+                  (selectedInterview?.start && selectedInterview?.end
+                    ? `${selectedInterview.start}~${selectedInterview.end}`
+                    : '')
+                }
+                onChange={(e) => {
+                  const [start, end] = e.target.value.split('~');
+                  updateInterviewField(student.id, 'start', start);
+                  updateInterviewField(student.id, 'end', end);
+                }}
+                className="border w-full text-center"
+              />
+            </div>
           </div>
-
-          {/* 오른쪽 1칸 : 금주의 멘토 + 부원장 인터뷰 */}
-          <div className="col-span-1">
-            {printOpts.interview.enabled && (
-              <div className="grid grid-cols-2 gap-2">
-
-                {/* 금주의 멘토 */}
-                <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
-                  <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
-
-                  <div className="text-sm text-center font-medium mb-1">
-                    {mentorDayLabel}
-                  </div>
-
-                  <input
-                    value={ov.mentorOfWeek ?? mentorName}
-                    onChange={(e) =>
-                      updateMentorOverride(student.id, e.target.value)
-                    }
-                    className="border w-full text-center font-semibold flex items-center justify-center"
-                  />
-                </div>
-
-                {/* 부원장 인터뷰 */}
-                <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
-                  <h3 className="font-semibold mb-1 text-center">부원장 인터뷰</h3>
-
-                  <input
-                    placeholder="요일"
-                    value={ov.viceDirector?.day ?? selectedInterview?.day ?? ''}
-                    onChange={(e) =>
-                      updateInterviewField(student.id, 'day', e.target.value)
-                    }
-                    className="border w-full mb-1 text-center"
-                  />
-
-                  <input
-                    placeholder="시간"
-                    value={
-                      ov.viceDirector?.time ??
-                      (selectedInterview?.start && selectedInterview?.end
-                        ? `${selectedInterview.start}~${selectedInterview.end}`
-                        : '')
-                    }
-                    onChange={(e) => {
-                      const [start, end] = e.target.value.split('~');
-                      updateInterviewField(student.id, 'start', start);
-                      updateInterviewField(student.id, 'end', end);
-                    }}
-                    className="border w-full text-center"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        )}
 
         {/* 공지사항 */}
         <div className="grid grid-cols-2 gap-4 print-notices">

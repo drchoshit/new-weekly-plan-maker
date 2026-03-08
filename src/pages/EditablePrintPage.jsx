@@ -448,23 +448,6 @@ export default function EditablePrintPage() {
       {/* 인쇄 카드 */}
       <div className="space-y-4 print:space-y-2 print-hide-border">
         
-        {/* 플래너 체크 */}
-        <section className="border rounded">
-          <header className="bg-gray-100 px-3 py-2 font-semibold">플래너 체크</header>
-          <div className="p-3">
-            {editing ? (
-              <textarea
-                value={plannerText}
-                onChange={(e) => setPlannerText(e.target.value)}
-                className="w-full border rounded px-2 py-2 min-h-[60px]"
-                placeholder="예: 월 12:40~12:50 / 수 12:50~13:00 / 금 16:40~16:50"
-              />
-            ) : (
-              <div className="whitespace-pre-wrap">{plannerText || "-"}</div>
-            )}
-          </div>
-        </section>
-
         {/* 멘탈 케어링 */}
         <section className="border rounded">
           <header className="bg-gray-100 px-3 py-2 font-semibold">멘탈 케어링</header>
