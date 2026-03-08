@@ -49,6 +49,20 @@
     margin: 0;
   }
 
+  #print-area .print-interview-layout {
+    display: grid !important;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) !important;
+    align-items: stretch;
+  }
+  #print-area .print-interview-left {
+    grid-column: 1;
+    min-width: 0;
+  }
+  #print-area .print-interview-right {
+    grid-column: 2;
+    min-width: 0;
+  }
+
   /* 5) overflow 숨김 */
   .overflow-x-auto {
     overflow-x: hidden !important;
@@ -143,6 +157,19 @@ body:not(.print-use-zoom).print-sizing .print-notice-inner {
 }
 .print-sizing #print-area ul {
   margin: 0;
+}
+.print-sizing #print-area .print-interview-layout {
+  display: grid !important;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr) !important;
+  align-items: stretch;
+}
+.print-sizing #print-area .print-interview-left {
+  grid-column: 1;
+  min-width: 0;
+}
+.print-sizing #print-area .print-interview-right {
+  grid-column: 2;
+  min-width: 0;
 }
 body.print-use-zoom.print-sizing .print-scale {
   transform: none !important;
