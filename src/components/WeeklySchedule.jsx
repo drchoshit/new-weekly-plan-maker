@@ -267,6 +267,22 @@ export default function WeeklySchedule({
         if (nextNoticeScale >= currentNoticeScale - 0.002) break;
         page.style.setProperty('--notice-scale', nextNoticeScale.toFixed(3));
       }
+
+      // 마지막 강제 보정: 내용이 남아 있으면 추가 축소해서 무조건 한 페이지에 맞춤
+      const finalBounds = getContentBounds(scaleTarget);
+      const finalSafeW = Math.max(0, innerW - 2);
+      const finalSafeH = Math.max(0, innerH - 2);
+      if (finalBounds.w > finalSafeW || finalBounds.h > finalSafeH) {
+        const currentScale = parseFloat(
+          page.style.getPropertyValue('--print-scale') || '1'
+        );
+        const hardFix =
+          Math.min(finalSafeW / finalBounds.w, finalSafeH / finalBounds.h) * 0.985;
+        if (Number.isFinite(hardFix) && hardFix > 0 && Number.isFinite(currentScale)) {
+          const nextScale = Math.max(0.2, currentScale * hardFix);
+          page.style.setProperty('--print-scale', nextScale.toFixed(3));
+        }
+      }
     });
   };
 
@@ -824,9 +840,9 @@ export default function WeeklySchedule({
 
         {/* 금주의 멘토(상단) + 부원장 인터뷰(하단) + 수기작성 표 */}
         {printOpts.interview.enabled && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+          <div className="grid grid-cols-1 lg:grid-cols-12 print:grid-cols-12 gap-3 items-stretch">
             {/* 수기 작성용 표 */}
-            <div className="lg:col-span-9 border border-print-line rounded-sm p-2 bg-white">
+            <div className="lg:col-span-9 print:col-span-9 border border-print-line rounded-sm p-2 bg-white">
               <table className="w-full table-fixed border-collapse text-center text-sm">
                 <colgroup>
                   <col className="w-20" />
@@ -859,7 +875,7 @@ export default function WeeklySchedule({
               </table>
             </div>
 
-            <div className="lg:col-span-3 flex h-full min-h-0 flex-col gap-2">
+            <div className="lg:col-span-3 print:col-span-3 flex h-full min-h-0 flex-col gap-2">
               {/* 금주의 멘토 */}
               <div className="border border-print-line rounded-sm p-2 bg-white">
                 <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
