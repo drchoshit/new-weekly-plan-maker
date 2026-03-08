@@ -236,49 +236,69 @@ export default function WeeklySchedule({
       if (!safeW || !safeH) return;
 
       const safeLeft = contentRect.left + 1;
-      const safeRight = contentRect.right - 1;
-      const safeBottom = contentRect.bottom - 2;
+      const safeBottom = contentRect.bottom - 4;
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
 
-      let scale = Math.min(safeW / base.w, safeH / base.h);
-      if (!Number.isFinite(scale) || scale <= 0) return;
-      scale = Math.max(0.08, scale * 0.997);
-
-      const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const applyCenteredOffset = () => {
         const b = getRenderedBounds(scaleTarget);
-        const freeW = safeW - b.w;
-        const desiredLeft = safeLeft + Math.max(0, freeW / 2);
-        const rawOffset = desiredLeft - b.minLeft;
-        const minOffset = safeLeft - b.minLeft;
-        const maxOffset = safeRight - b.maxRight;
-        const offsetX = clamp(rawOffset, Math.min(minOffset, maxOffset), Math.max(minOffset, maxOffset));
+        const freeW = Math.max(0, safeW - b.w);
+        const desiredLeft = safeLeft + freeW / 2;
+        const offsetX = desiredLeft - b.minLeft;
         page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
+        return b;
       };
 
-      page.style.setProperty('--print-scale', scale.toFixed(4));
-
-      // 실제 렌더 결과 기준으로 하단/우측 overflow가 없어질 때까지만 미세 축소
-      for (let i = 0; i < 20; i += 1) {
+      const testScale = (candidate) => {
+        page.style.setProperty('--print-scale', candidate.toFixed(4));
+        applyCenteredOffset();
         applyCenteredOffset();
         const fitted = getRenderedBounds(scaleTarget);
-        const overflowX = Math.max(0, fitted.maxRight - safeRight);
+        const overflowW = Math.max(0, fitted.w - safeW);
         const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
-        if (overflowX <= 0.5 && overflowBottom <= 0.5) break;
+        return {
+          fits: overflowW <= 0.4 && overflowBottom <= 0.4,
+          fitted,
+        };
+      };
 
-        const fixW = overflowX > 0 ? safeW / Math.max(1, fitted.w) : 1;
-        const fixH = overflowBottom > 0 ? safeH / Math.max(1, fitted.h) : 1;
-        const fix = Math.min(fixW, fixH) * 0.997;
-        if (!Number.isFinite(fix) || fix <= 0) break;
+      // 세로를 최대한 채우는 "최대 적합 스케일" 탐색
+      const rough = Math.min(safeW / base.w, safeH / base.h);
+      if (!Number.isFinite(rough) || rough <= 0) return;
 
-        const nextScale = Math.max(0.06, scale * fix);
-        if (Math.abs(nextScale - scale) < 0.0001) break;
-        scale = nextScale;
-        page.style.setProperty('--print-scale', scale.toFixed(4));
+      let low = Math.max(0.05, rough * 0.7);
+      let high = Math.max(low * 1.2, rough * 1.8);
+
+      // low가 안 맞으면 더 낮춰서 시작
+      let lowResult = testScale(low);
+      let lowGuard = 0;
+      while (!lowResult.fits && lowGuard < 12) {
+        low *= 0.8;
+        lowResult = testScale(low);
+        lowGuard += 1;
+      }
+      if (!lowResult.fits) return;
+
+      // high가 맞으면 upper bound를 더 올림
+      let highResult = testScale(high);
+      let highGuard = 0;
+      while (highResult.fits && high < 4 && highGuard < 16) {
+        low = high;
+        high *= 1.12;
+        highResult = testScale(high);
+        highGuard += 1;
       }
 
+      for (let i = 0; i < 24; i += 1) {
+        const mid = (low + high) / 2;
+        const midResult = testScale(mid);
+        if (midResult.fits) low = mid;
+        else high = mid;
+      }
+
+      const finalScale = Math.max(0.05, low * 0.999);
+      testScale(finalScale);
       applyCenteredOffset();
     });
   };
