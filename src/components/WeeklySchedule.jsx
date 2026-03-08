@@ -196,29 +196,32 @@ export default function WeeklySchedule({
       if (!innerW || !innerH) return;
 
       // 인쇄 엔진 오차를 고려해 안전 여백을 조금 두고 최대 배율 계산
-      const safeW = Math.max(0, innerW - 10);
-      const safeH = Math.max(0, innerH - 14);
+      const safeW = Math.max(0, innerW - 12);
+      const safeH = Math.max(0, innerH - 24);
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
 
       let scale = Math.min(safeW / base.w, safeH / base.h);
       if (!Number.isFinite(scale) || scale <= 0) return;
-      scale = Math.max(0.1, scale * 0.995);
-      page.style.setProperty('--print-scale', scale.toFixed(3));
+      scale = Math.max(0.08, scale * 0.995);
+      page.style.setProperty('--print-scale', scale.toFixed(4));
 
-      // 경계선 오차로 넘치면 한 번 더 축소
+      // 넘침이 사라질 때까지 반복 축소 (짤림 방지 최우선)
       let fitted = getContentBounds(scaleTarget);
-      if (fitted.w > safeW || fitted.h > safeH) {
+      let guard = 0;
+      while ((fitted.w > safeW || fitted.h > safeH) && guard < 120) {
+        guard += 1;
         const fix = Math.min(
           safeW / Math.max(1, fitted.w),
           safeH / Math.max(1, fitted.h)
-        ) * 0.995;
-        if (Number.isFinite(fix) && fix > 0) {
-          scale = Math.max(0.1, scale * fix);
-          page.style.setProperty('--print-scale', scale.toFixed(3));
-          fitted = getContentBounds(scaleTarget);
-        }
+        ) * 0.998;
+        if (!Number.isFinite(fix) || fix <= 0) break;
+        const nextScale = Math.max(0.06, scale * fix);
+        if (Math.abs(nextScale - scale) < 0.0002) break;
+        scale = nextScale;
+        page.style.setProperty('--print-scale', scale.toFixed(4));
+        fitted = getContentBounds(scaleTarget);
       }
 
       // 오른쪽 여백 쏠림 방지: 남는 가로 폭을 중앙 정렬
@@ -281,6 +284,9 @@ export default function WeeklySchedule({
         if (isPrintingRef.current) applyPrintScaling();
         pendingScaleTimerRef.current = setTimeout(() => {
           if (isPrintingRef.current) applyPrintScaling();
+          pendingScaleTimerRef.current = setTimeout(() => {
+            if (isPrintingRef.current) applyPrintScaling();
+          }, 320);
         }, 140);
       }, 60);
     };
