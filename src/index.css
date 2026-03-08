@@ -103,7 +103,6 @@
   }
   .print-scale {
     display: flow-root; /* margin collapse 방지 */
-    zoom: var(--print-scale, 1);
     transform: scale(var(--print-scale, 1));
     transform-origin: top left;
   }
@@ -118,7 +117,11 @@
     line-height: calc(1.4 * var(--notice-scale, 1));
   }
   body.print-use-zoom .print-scale {
+    zoom: var(--print-scale, 1);
     transform: none !important;
+  }
+  body:not(.print-use-zoom) .print-scale {
+    zoom: 1 !important;
   }
 }
 body {
@@ -143,7 +146,8 @@ body {
 }
 .print-sizing .print-scale {
   display: flow-root;
-  zoom: var(--print-scale, 1);
+  transform: scale(var(--print-scale, 1));
+  transform-origin: top left;
 }
 .print-sizing .print-notice-inner {
   transform-origin: top left;
@@ -172,5 +176,9 @@ body:not(.print-use-zoom).print-sizing .print-notice-inner {
   min-width: 0;
 }
 body.print-use-zoom.print-sizing .print-scale {
+  zoom: var(--print-scale, 1);
   transform: none !important;
+}
+body:not(.print-use-zoom).print-sizing .print-scale {
+  zoom: 1 !important;
 }
