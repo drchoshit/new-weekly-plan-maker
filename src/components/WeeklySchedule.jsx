@@ -131,12 +131,21 @@ export default function WeeklySchedule({
     document.body.classList.remove('print-use-zoom');
   };
 
-  const getPaddingSize = (el) => {
-    const cs = window.getComputedStyle(el);
+  const getPageContentRect = (page) => {
+    const rect = page.getBoundingClientRect();
+    const cs = window.getComputedStyle(page);
     const px = (v) => parseFloat(v || '0') || 0;
+    const pl = px(cs.paddingLeft);
+    const pr = px(cs.paddingRight);
+    const pt = px(cs.paddingTop);
+    const pb = px(cs.paddingBottom);
     return {
-      x: px(cs.paddingLeft) + px(cs.paddingRight),
-      y: px(cs.paddingTop) + px(cs.paddingBottom),
+      left: rect.left + pl,
+      right: rect.right - pr,
+      top: rect.top + pt,
+      bottom: rect.bottom - pb,
+      w: Math.max(0, rect.width - pl - pr),
+      h: Math.max(0, rect.height - pt - pb),
     };
   };
 
@@ -168,6 +177,37 @@ export default function WeeklySchedule({
     };
   };
 
+  const getRenderedBounds = (root) => {
+    const rootRect = root.getBoundingClientRect();
+    let minLeft = rootRect.left;
+    let minTop = rootRect.top;
+    let maxRight = rootRect.right;
+    let maxBottom = rootRect.bottom;
+    const nodes = [root, ...root.querySelectorAll('*')];
+    for (let i = 0; i < nodes.length; i += 1) {
+      const el = nodes[i];
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      const cs = window.getComputedStyle(el);
+      const ml = parseFloat(cs.marginLeft) || 0;
+      const mt = parseFloat(cs.marginTop) || 0;
+      const mr = parseFloat(cs.marginRight) || 0;
+      const mb = parseFloat(cs.marginBottom) || 0;
+      if (r.left - ml < minLeft) minLeft = r.left - ml;
+      if (r.top - mt < minTop) minTop = r.top - mt;
+      if (r.right + mr > maxRight) maxRight = r.right + mr;
+      if (r.bottom + mb > maxBottom) maxBottom = r.bottom + mb;
+    }
+    return {
+      minLeft,
+      minTop,
+      maxRight,
+      maxBottom,
+      w: Math.max(0, maxRight - minLeft),
+      h: Math.max(0, maxBottom - minTop),
+    };
+  };
+
   const applyPrintScaling = () => {
     const isPrintMode = window.matchMedia && window.matchMedia('print').matches;
     if (!isPrintingRef.current && !isPrintMode) return;
@@ -188,16 +228,17 @@ export default function WeeklySchedule({
       page.style.setProperty('--notice-scale', 1);
       page.style.setProperty('--print-offset-x', '0px');
 
-      const pad = getPaddingSize(page);
-      const availableW = (isPrint ? page.clientWidth : 0) || fallbackW;
-      const availableH = (isPrint ? page.clientHeight : 0) || fallbackH;
-      const innerW = Math.max(0, availableW - pad.x);
-      const innerH = Math.max(0, availableH - pad.y);
-      if (!innerW || !innerH) return;
+      const contentRect = getPageContentRect(page);
+      const fallbackInnerW = Math.max(0, fallbackW - 24);
+      const fallbackInnerH = Math.max(0, fallbackH - 24);
+      const safeW = Math.max(0, (isPrint ? contentRect.w : fallbackInnerW) - 12);
+      const safeH = Math.max(0, (isPrint ? contentRect.h : fallbackInnerH) - 26);
+      if (!safeW || !safeH) return;
 
-      // 인쇄 엔진 오차를 고려해 안전 여백을 조금 두고 최대 배율 계산
-      const safeW = Math.max(0, innerW - 12);
-      const safeH = Math.max(0, innerH - 24);
+      const safeLeft = contentRect.left + 1;
+      const safeRight = contentRect.right - 1;
+      const safeTop = contentRect.top + 1;
+      const safeBottom = contentRect.bottom - 12;
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
@@ -206,27 +247,42 @@ export default function WeeklySchedule({
       if (!Number.isFinite(scale) || scale <= 0) return;
       scale = Math.max(0.08, scale * 0.995);
       page.style.setProperty('--print-scale', scale.toFixed(4));
+      const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+      const applyCenteredOffset = () => {
+        const b = getRenderedBounds(scaleTarget);
+        const freeW = safeW - b.w;
+        const desiredLeft = safeLeft + Math.max(0, freeW / 2);
+        const rawOffset = desiredLeft - b.minLeft;
+        const minOffset = safeLeft - b.minLeft;
+        const maxOffset = safeRight - b.maxRight;
+        const offsetX = clamp(rawOffset, Math.min(minOffset, maxOffset), Math.max(minOffset, maxOffset));
+        page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
+      };
 
       // 넘침이 사라질 때까지 반복 축소 (짤림 방지 최우선)
-      let fitted = getContentBounds(scaleTarget);
       let guard = 0;
-      while ((fitted.w > safeW || fitted.h > safeH) && guard < 120) {
+      while (guard < 220) {
         guard += 1;
-        const fix = Math.min(
-          safeW / Math.max(1, fitted.w),
-          safeH / Math.max(1, fitted.h)
-        ) * 0.998;
-        if (!Number.isFinite(fix) || fix <= 0) break;
-        const nextScale = Math.max(0.06, scale * fix);
-        if (Math.abs(nextScale - scale) < 0.0002) break;
-        scale = nextScale;
+        applyCenteredOffset();
+        const fitted = getRenderedBounds(scaleTarget);
+        const overflowX = Math.max(0, fitted.maxRight - safeRight, safeLeft - fitted.minLeft);
+        const overflowY = Math.max(0, fitted.maxBottom - safeBottom, safeTop - fitted.minTop);
+        if (overflowX <= 0.5 && overflowY <= 0.5) break;
+
+        const fitRatioW = safeW / Math.max(1, fitted.w);
+        const fitRatioH = safeH / Math.max(1, fitted.h);
+        const ratio = Math.min(fitRatioW, fitRatioH);
+        const fix = Number.isFinite(ratio) && ratio > 0 ? Math.min(0.999, ratio * 0.998) : 0.995;
+        const nextScale = Math.max(0.04, scale * fix);
+        if (Math.abs(nextScale - scale) < 0.0001) {
+          scale = Math.max(0.04, scale * 0.995);
+        } else {
+          scale = nextScale;
+        }
         page.style.setProperty('--print-scale', scale.toFixed(4));
-        fitted = getContentBounds(scaleTarget);
       }
 
-      // 오른쪽 여백 쏠림 방지: 남는 가로 폭을 중앙 정렬
-      const offsetX = Math.max(0, (innerW - fitted.w) / 2);
-      page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
+      applyCenteredOffset();
     });
   };
 
