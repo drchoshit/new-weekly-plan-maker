@@ -104,7 +104,7 @@
   }
   .print-scale {
     display: flow-root; /* margin collapse 방지 */
-    transform: scale(var(--print-scale, 1));
+    transform: translateX(var(--print-offset-x, 0px)) scale(var(--print-scale, 1));
     transform-origin: top left;
   }
   .print-notice-inner {
@@ -147,7 +147,7 @@ body {
 }
 .print-sizing .print-scale {
   display: flow-root;
-  transform: scale(var(--print-scale, 1));
+  transform: translateX(var(--print-offset-x, 0px)) scale(var(--print-scale, 1));
   transform-origin: top left;
 }
 .print-sizing .print-notice-inner {

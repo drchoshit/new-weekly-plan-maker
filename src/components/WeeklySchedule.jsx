@@ -186,6 +186,7 @@ export default function WeeklySchedule({
 
       page.style.setProperty('--print-scale', 1);
       page.style.setProperty('--notice-scale', 1);
+      page.style.setProperty('--print-offset-x', '0px');
 
       const pad = getPaddingSize(page);
       const availableW = (isPrint ? page.clientWidth : 0) || fallbackW;
@@ -194,42 +195,35 @@ export default function WeeklySchedule({
       const innerH = Math.max(0, availableH - pad.y);
       if (!innerW || !innerH) return;
 
-      const safeW = Math.max(0, innerW - 2);
-      const safeH = Math.max(0, innerH - 2);
+      // 인쇄 엔진 오차를 고려해 안전 여백을 조금 두고 최대 배율 계산
+      const safeW = Math.max(0, innerW - 10);
+      const safeH = Math.max(0, innerH - 14);
 
-      const fitsAtScale = (scale) => {
-        page.style.setProperty('--print-scale', scale.toFixed(3));
-        const bounds = getContentBounds(scaleTarget);
-        return bounds.w <= safeW && bounds.h <= safeH;
-      };
+      const base = getContentBounds(scaleTarget);
+      if (!base.w || !base.h) return;
 
-      // 세로를 최대한 채우는 방향으로 "들어갈 수 있는 최대 배율" 탐색
-      let low = 0.1;
-      let high = 2;
+      let scale = Math.min(safeW / base.w, safeH / base.h);
+      if (!Number.isFinite(scale) || scale <= 0) return;
+      scale = Math.max(0.1, scale * 0.995);
+      page.style.setProperty('--print-scale', scale.toFixed(3));
 
-      if (fitsAtScale(high)) {
-        while (high < 4 && fitsAtScale(high * 1.15)) {
-          high *= 1.15;
-        }
-      }
-
-      for (let i = 0; i < 20; i += 1) {
-        const mid = (low + high) / 2;
-        if (fitsAtScale(mid)) low = mid;
-        else high = mid;
-      }
-
-      page.style.setProperty('--print-scale', low.toFixed(3));
-
-      // 경계선 오차 보정
-      const tail = getContentBounds(scaleTarget);
-      if (tail.w > safeW || tail.h > safeH) {
-        const fix = Math.min(safeW / Math.max(1, tail.w), safeH / Math.max(1, tail.h)) * 0.995;
+      // 경계선 오차로 넘치면 한 번 더 축소
+      let fitted = getContentBounds(scaleTarget);
+      if (fitted.w > safeW || fitted.h > safeH) {
+        const fix = Math.min(
+          safeW / Math.max(1, fitted.w),
+          safeH / Math.max(1, fitted.h)
+        ) * 0.995;
         if (Number.isFinite(fix) && fix > 0) {
-          const nextScale = Math.max(0.1, low * fix);
-          page.style.setProperty('--print-scale', nextScale.toFixed(3));
+          scale = Math.max(0.1, scale * fix);
+          page.style.setProperty('--print-scale', scale.toFixed(3));
+          fitted = getContentBounds(scaleTarget);
         }
       }
+
+      // 오른쪽 여백 쏠림 방지: 남는 가로 폭을 중앙 정렬
+      const offsetX = Math.max(0, (innerW - fitted.w) / 2);
+      page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
     });
   };
 
