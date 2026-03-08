@@ -120,21 +120,10 @@ export default function WeeklySchedule({
     return px;
   };
 
-  const supportsZoom = () => {
-    try {
-      return typeof CSS !== 'undefined' && CSS.supports && CSS.supports('zoom', '1');
-    } catch {
-      return false;
-    }
-  };
-
   const enablePrintSizing = () => {
     document.body.classList.add('print-sizing');
-    if (supportsZoom()) {
-      document.body.classList.add('print-use-zoom');
-    } else {
-      document.body.classList.remove('print-use-zoom');
-    }
+    // zoom 기반 스케일은 브라우저별 측정 오차가 커서 print에서는 사용하지 않음
+    document.body.classList.remove('print-use-zoom');
   };
 
   const disablePrintSizing = () => {
@@ -198,9 +187,7 @@ export default function WeeklySchedule({
     pages.forEach((page) => {
       const scaleTarget = page.querySelector('.print-scale');
       if (!scaleTarget) return;
-      const noticeBlock = page.querySelector('.print-notices');
 
-      // reset scales so we measure the natural size
       page.style.setProperty('--print-scale', 1);
       page.style.setProperty('--notice-scale', 1);
 
@@ -211,88 +198,41 @@ export default function WeeklySchedule({
       const innerH = Math.max(0, availableH - pad.y);
       if (!innerW || !innerH) return;
 
-      const fitScale = () => {
-        page.style.setProperty('--print-scale', 1);
-        const base = getContentBounds(scaleTarget);
-        if (!base.w || !base.h) return null;
-        let scale = Math.min(innerW / base.w, innerH / base.h);
-        if (!Number.isFinite(scale) || scale <= 0) return null;
+      const safeW = Math.max(0, innerW - 2);
+      const safeH = Math.max(0, innerH - 2);
 
-        // 반복 보정: 실제 렌더링 높이까지 확인 후 미세 축소
-        const safeW = Math.max(0, innerW - 6);
-        const safeH = Math.max(0, innerH - 10);
-        for (let i = 0; i < 6; i += 1) {
-          page.style.setProperty('--print-scale', scale.toFixed(3));
-          const after = getContentBounds(scaleTarget);
-          const usedW = after.w;
-          const usedH = after.h;
-          if (usedW <= safeW && usedH <= safeH) break;
-          const fix = Math.min(safeW / usedW, safeH / usedH);
-          if (!Number.isFinite(fix) || fix <= 0) break;
-          scale = scale * fix;
-        }
+      const fitsAtScale = (scale) => {
         page.style.setProperty('--print-scale', scale.toFixed(3));
-
-        // 마지막 안전 보정
-        const tail = getContentBounds(scaleTarget);
-        if (tail.h > safeH || tail.w > safeW) {
-          const fix = Math.min(safeW / tail.w, safeH / tail.h) * 0.99;
-          if (Number.isFinite(fix) && fix > 0) {
-            scale = scale * fix;
-            page.style.setProperty('--print-scale', scale.toFixed(3));
-          }
-        }
-        return scale;
+        const bounds = getContentBounds(scaleTarget);
+        return bounds.w <= safeW && bounds.h <= safeH;
       };
 
-      for (let pass = 0; pass < 3; pass += 1) {
-        const scale = fitScale();
-        if (!scale) break;
+      // 세로를 최대한 채우는 방향으로 "들어갈 수 있는 최대 배율" 탐색
+      let low = 0.1;
+      let high = 2;
 
-        const after = getContentBounds(scaleTarget);
-        const safeH = Math.max(0, innerH - 6);
-        const overflow = after.h - safeH;
-        if (overflow <= 0.5 || !noticeBlock) break;
-
-        const noticeBounds = getContentBounds(noticeBlock);
-        if (!noticeBounds.h) break;
-
-        const currentNoticeScale = parseFloat(
-          page.style.getPropertyValue('--notice-scale') || '1'
-        );
-        const targetNoticeH = Math.max(0, noticeBounds.h - overflow - 2);
-        let nextNoticeScale = (targetNoticeH / noticeBounds.h) * currentNoticeScale;
-        nextNoticeScale = Math.min(1, Math.max(0.45, nextNoticeScale));
-
-        if (nextNoticeScale >= currentNoticeScale - 0.002) break;
-        page.style.setProperty('--notice-scale', nextNoticeScale.toFixed(3));
+      if (fitsAtScale(high)) {
+        while (high < 4 && fitsAtScale(high * 1.15)) {
+          high *= 1.15;
+        }
       }
 
-      // 마지막 강제 보정: 남는 overflow가 0이 될 때까지 추가 축소
-      const finalSafeW = Math.max(0, innerW - 2);
-      const finalSafeH = Math.max(0, innerH - 2);
-      let guard = 0;
-      while (guard < 60) {
-        guard += 1;
-        const finalBounds = getContentBounds(scaleTarget);
-        if (finalBounds.w <= finalSafeW && finalBounds.h <= finalSafeH) break;
+      for (let i = 0; i < 20; i += 1) {
+        const mid = (low + high) / 2;
+        if (fitsAtScale(mid)) low = mid;
+        else high = mid;
+      }
 
-        const currentScale = parseFloat(
-          page.style.getPropertyValue('--print-scale') || '1'
-        );
-        if (!Number.isFinite(currentScale) || currentScale <= 0) break;
+      page.style.setProperty('--print-scale', low.toFixed(3));
 
-        const hardFix = Math.min(
-          finalSafeW / Math.max(1, finalBounds.w),
-          finalSafeH / Math.max(1, finalBounds.h)
-        );
-        const adjustedFix = Number.isFinite(hardFix) && hardFix > 0
-          ? hardFix * 0.995
-          : 0.99;
-        const nextScale = Math.max(0.1, currentScale * adjustedFix);
-
-        if (Math.abs(nextScale - currentScale) < 0.0005) break;
-        page.style.setProperty('--print-scale', nextScale.toFixed(3));
+      // 경계선 오차 보정
+      const tail = getContentBounds(scaleTarget);
+      if (tail.w > safeW || tail.h > safeH) {
+        const fix = Math.min(safeW / Math.max(1, tail.w), safeH / Math.max(1, tail.h)) * 0.995;
+        if (Number.isFinite(fix) && fix > 0) {
+          const nextScale = Math.max(0.1, low * fix);
+          page.style.setProperty('--print-scale', nextScale.toFixed(3));
+        }
       }
     });
   };
