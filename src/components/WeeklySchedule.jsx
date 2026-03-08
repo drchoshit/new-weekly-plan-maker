@@ -235,8 +235,9 @@ export default function WeeklySchedule({
       const safeH = Math.max(0, (isPrint ? contentRect.h : fallbackInnerH) - 8);
       if (!safeW || !safeH) return;
 
-      const safeLeft = contentRect.left + 1;
-      const safeBottom = contentRect.bottom - 12;
+      const safeLeft = contentRect.left + 2;
+      const safeRight = contentRect.right - 2;
+      const safeBottom = contentRect.bottom - 14;
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
@@ -245,7 +246,10 @@ export default function WeeklySchedule({
         const b = getRenderedBounds(scaleTarget);
         const freeW = Math.max(0, safeW - b.w);
         const desiredLeft = safeLeft + freeW / 2;
-        const offsetX = desiredLeft - b.minLeft;
+        const rawOffset = desiredLeft - b.minLeft;
+        const minOffset = safeLeft - b.minLeft;
+        const maxOffset = safeRight - b.maxRight;
+        const offsetX = Math.max(Math.min(rawOffset, maxOffset), minOffset);
         page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
         return b;
       };
@@ -255,10 +259,11 @@ export default function WeeklySchedule({
         applyCenteredOffset();
         applyCenteredOffset();
         const fitted = getRenderedBounds(scaleTarget);
-        const overflowW = Math.max(0, fitted.w - safeW);
+        const overflowLeft = Math.max(0, safeLeft - fitted.minLeft);
+        const overflowRight = Math.max(0, fitted.maxRight - safeRight);
         const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
         return {
-          fits: overflowW <= 0.15 && overflowBottom <= 0.15,
+          fits: overflowLeft <= 0.1 && overflowRight <= 0.1 && overflowBottom <= 0.1,
           fitted,
         };
       };
@@ -304,9 +309,10 @@ export default function WeeklySchedule({
       let settleScale = finalScale;
       for (let i = 0; i < 24; i += 1) {
         const { fitted } = testScale(settleScale);
-        const overflowW = Math.max(0, fitted.w - safeW);
+        const overflowLeft = Math.max(0, safeLeft - fitted.minLeft);
+        const overflowRight = Math.max(0, fitted.maxRight - safeRight);
         const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
-        if (overflowW <= 0.05 && overflowBottom <= 0.05) break;
+        if (overflowLeft <= 0.05 && overflowRight <= 0.05 && overflowBottom <= 0.05) break;
         settleScale = Math.max(0.04, settleScale * 0.995);
       }
 
