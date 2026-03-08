@@ -176,13 +176,9 @@ export default function WeeklySchedule({
     if (!pages.length) return;
 
     const isPrint = isPrintMode;
-    let fallbackW = 0;
-    let fallbackH = 0;
-    if (!isPrint) {
-      const pxPerMm = getPxPerMm();
-      fallbackW = 297 * pxPerMm; // A4 가로 전체
-      fallbackH = 210 * pxPerMm; // A4 세로 전체
-    }
+    const pxPerMm = getPxPerMm();
+    const fallbackW = 297 * pxPerMm; // A4 가로 전체
+    const fallbackH = 210 * pxPerMm; // A4 세로 전체
 
     pages.forEach((page) => {
       const scaleTarget = page.querySelector('.print-scale');
@@ -192,8 +188,8 @@ export default function WeeklySchedule({
       page.style.setProperty('--notice-scale', 1);
 
       const pad = getPaddingSize(page);
-      const availableW = (isPrint && page.clientWidth) ? page.clientWidth : fallbackW;
-      const availableH = (isPrint && page.clientHeight) ? page.clientHeight : fallbackH;
+      const availableW = (isPrint ? page.clientWidth : 0) || fallbackW;
+      const availableH = (isPrint ? page.clientHeight : 0) || fallbackH;
       const innerW = Math.max(0, availableW - pad.x);
       const innerH = Math.max(0, availableH - pad.y);
       if (!innerW || !innerH) return;
@@ -289,7 +285,10 @@ export default function WeeklySchedule({
       if (pendingScaleTimerRef.current) clearTimeout(pendingScaleTimerRef.current);
       pendingScaleTimerRef.current = setTimeout(() => {
         if (isPrintingRef.current) applyPrintScaling();
-      }, 50);
+        pendingScaleTimerRef.current = setTimeout(() => {
+          if (isPrintingRef.current) applyPrintScaling();
+        }, 140);
+      }, 60);
     };
     const onAfterPrint = () => {
       cleanupAfterPrint();

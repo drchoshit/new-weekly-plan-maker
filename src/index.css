@@ -36,7 +36,7 @@
     padding: 0;
     word-break: break-word;
     overflow-wrap: anywhere;
-    overflow: hidden;
+    overflow: visible;
   }
 
   /* 4) 컬러 유지 */
@@ -87,8 +87,9 @@
   /* 8) 한 학생 = 한 페이지 */
   .print-page {
     --notice-scale: 1;
-    width: 297mm;   /* A4 가로 전체 폭 */
-    height: 210mm;  /* A4 가로 전체 높이 */
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
     padding: 3mm 4mm; /* 최소 안전 여백 */
     box-sizing: border-box;
     overflow: hidden;
