@@ -822,55 +822,96 @@ export default function WeeklySchedule({
         {/* 멘탈 케어링은 요청에 따라 '숨김' 처리 (렌더하지 않음) */}
         {/* {printOpts.mentalCare.enabled && ( ... )}  → 제거 */}
 
-        {/* 금주의 멘토 + 부원장 인터뷰 */}
+        {/* 금주의 멘토(상단) + 부원장 인터뷰(하단) + 수기작성 표 */}
         {printOpts.interview.enabled && (
-          <div className="grid grid-cols-2 gap-2">
-
-            {/* 금주의 멘토 */}
-            <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
-              <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
-
-              <div className="text-sm text-center font-medium mb-1">
-                {mentorDayLabel}
-              </div>
-
-              <input
-                value={ov.mentorOfWeek ?? mentorName}
-                onChange={(e) =>
-                  updateMentorOverride(student.id, e.target.value)
-                }
-                className="border w-full text-center font-semibold flex items-center justify-center"
-              />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+            {/* 수기 작성용 표 */}
+            <div className="lg:col-span-9 border border-print-line rounded-sm p-2 bg-white">
+              <table className="w-full table-fixed border-collapse text-center text-sm">
+                <colgroup>
+                  <col className="w-20" />
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <col key={`slot-col-${n}`} />
+                  ))}
+                </colgroup>
+                <tbody>
+                  <tr className="bg-slate-50">
+                    <td className="border border-print-line px-1 py-1.5 font-semibold whitespace-nowrap">순서</td>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <td key={`order-${n}`} className="border border-print-line py-1.5 font-medium">
+                        {n}
+                      </td>
+                    ))}
+                  </tr>
+                  {["과목", "문제 번호", "배정 멘토", "예정 요일"].map((label) => (
+                    <tr key={label}>
+                      <td className="border border-print-line px-1 py-1.5 font-semibold bg-slate-50 whitespace-nowrap">
+                        {label}
+                      </td>
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <td key={`${label}-${n}`} className="border border-print-line h-[34px] py-1.5">
+                          &nbsp;
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
-            {/* 부원장 인터뷰 */}
-            <div className="border rounded-sm p-2 h-full flex flex-col justify-between">
-              <h3 className="font-semibold mb-1 text-center">부원장 인터뷰</h3>
+            <div className="lg:col-span-3 flex h-full min-h-0 flex-col gap-2">
+              {/* 금주의 멘토 */}
+              <div className="border border-print-line rounded-sm p-2 bg-white">
+                <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
 
-              <input
-                placeholder="요일"
-                value={ov.viceDirector?.day ?? selectedInterview?.day ?? ''}
-                onChange={(e) =>
-                  updateInterviewField(student.id, 'day', e.target.value)
-                }
-                className="border w-full mb-1 text-center"
-              />
+                <div className="text-sm text-center font-medium mb-1">
+                  {mentorDayLabel}
+                </div>
 
-              <input
-                placeholder="시간"
-                value={
-                  ov.viceDirector?.time ??
-                  (selectedInterview?.start && selectedInterview?.end
-                    ? `${selectedInterview.start}~${selectedInterview.end}`
-                    : '')
-                }
-                onChange={(e) => {
-                  const [start, end] = e.target.value.split('~');
-                  updateInterviewField(student.id, 'start', start);
-                  updateInterviewField(student.id, 'end', end);
-                }}
-                className="border w-full text-center"
-              />
+                <input
+                  value={ov.mentorOfWeek ?? mentorName}
+                  onChange={(e) =>
+                    updateMentorOverride(student.id, e.target.value)
+                  }
+                  className="border border-print-line w-full text-center font-semibold"
+                />
+              </div>
+
+              {/* 부원장 인터뷰 (금주의 멘토 아래) */}
+              <div className="border border-print-line rounded-sm p-2 bg-white flex-1 flex flex-col justify-center">
+                <h3 className="font-semibold mb-1 text-center">부원장 인터뷰</h3>
+
+                <div className="flex items-center gap-1">
+                  <input
+                    placeholder="요일"
+                    value={ov.viceDirector?.day ?? selectedInterview?.day ?? ''}
+                    onChange={(e) =>
+                      updateInterviewField(student.id, 'day', e.target.value)
+                    }
+                    className="border border-print-line min-w-0 flex-1 text-center"
+                  />
+
+                  <span className="text-sm text-slate-500">|</span>
+
+                  <input
+                    placeholder="시간"
+                    value={
+                      ov.viceDirector?.time ??
+                      (selectedInterview?.start && selectedInterview?.end
+                        ? `${selectedInterview.start}~${selectedInterview.end}`
+                        : '')
+                    }
+                    onChange={(e) => {
+                      const [start = '', end = ''] = e.target.value
+                        .split('~')
+                        .map((v) => v.trim());
+                      updateInterviewField(student.id, 'start', start);
+                      updateInterviewField(student.id, 'end', end);
+                    }}
+                    className="border border-print-line min-w-0 flex-1 text-center"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         )}
