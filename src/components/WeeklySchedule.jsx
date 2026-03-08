@@ -236,7 +236,7 @@ export default function WeeklySchedule({
       if (!safeW || !safeH) return;
 
       const safeLeft = contentRect.left + 1;
-      const safeBottom = contentRect.bottom - 4;
+      const safeBottom = contentRect.bottom - 12;
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
@@ -258,7 +258,7 @@ export default function WeeklySchedule({
         const overflowW = Math.max(0, fitted.w - safeW);
         const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
         return {
-          fits: overflowW <= 0.4 && overflowBottom <= 0.4,
+          fits: overflowW <= 0.15 && overflowBottom <= 0.15,
           fitted,
         };
       };
@@ -299,6 +299,17 @@ export default function WeeklySchedule({
 
       const finalScale = Math.max(0.05, low * 0.999);
       testScale(finalScale);
+
+      // 인쇄 엔진 반올림 오차로 마지막 1~2px가 잘리는 경우 방지
+      let settleScale = finalScale;
+      for (let i = 0; i < 24; i += 1) {
+        const { fitted } = testScale(settleScale);
+        const overflowW = Math.max(0, fitted.w - safeW);
+        const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
+        if (overflowW <= 0.05 && overflowBottom <= 0.05) break;
+        settleScale = Math.max(0.04, settleScale * 0.995);
+      }
+
       applyCenteredOffset();
     });
   };
