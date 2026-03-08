@@ -231,22 +231,17 @@ export default function WeeklySchedule({
       const contentRect = getPageContentRect(page);
       const fallbackInnerW = Math.max(0, fallbackW - 24);
       const fallbackInnerH = Math.max(0, fallbackH - 24);
-      const safeW = Math.max(0, (isPrint ? contentRect.w : fallbackInnerW) - 12);
-      const safeH = Math.max(0, (isPrint ? contentRect.h : fallbackInnerH) - 26);
+      const safeW = Math.max(0, (isPrint ? contentRect.w : fallbackInnerW) - 8);
+      const safeH = Math.max(0, (isPrint ? contentRect.h : fallbackInnerH) - 8);
       if (!safeW || !safeH) return;
 
-      const safeLeft = contentRect.left + 1;
-      const safeRight = contentRect.right - 1;
-      const safeTop = contentRect.top + 1;
-      const safeBottom = contentRect.bottom - 12;
+      const safeLeft = contentRect.left + 1.5;
+      const safeRight = contentRect.right - 1.5;
+      const safeBottom = contentRect.bottom - 3;
 
       const base = getContentBounds(scaleTarget);
       if (!base.w || !base.h) return;
 
-      let scale = Math.min(safeW / base.w, safeH / base.h);
-      if (!Number.isFinite(scale) || scale <= 0) return;
-      scale = Math.max(0.08, scale * 0.995);
-      page.style.setProperty('--print-scale', scale.toFixed(4));
       const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
       const applyCenteredOffset = () => {
         const b = getRenderedBounds(scaleTarget);
@@ -259,29 +254,65 @@ export default function WeeklySchedule({
         page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
       };
 
-      // 넘침이 사라질 때까지 반복 축소 (짤림 방지 최우선)
-      let guard = 0;
-      while (guard < 220) {
-        guard += 1;
+      const testScale = (nextScale) => {
+        page.style.setProperty('--print-scale', nextScale.toFixed(4));
+        applyCenteredOffset();
         applyCenteredOffset();
         const fitted = getRenderedBounds(scaleTarget);
         const overflowX = Math.max(0, fitted.maxRight - safeRight, safeLeft - fitted.minLeft);
-        const overflowY = Math.max(0, fitted.maxBottom - safeBottom, safeTop - fitted.minTop);
-        if (overflowX <= 0.5 && overflowY <= 0.5) break;
+        const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
+        return {
+          fits: overflowX <= 0.4 && overflowBottom <= 0.4,
+          fitted,
+        };
+      };
 
-        const fitRatioW = safeW / Math.max(1, fitted.w);
-        const fitRatioH = safeH / Math.max(1, fitted.h);
-        const ratio = Math.min(fitRatioW, fitRatioH);
-        const fix = Number.isFinite(ratio) && ratio > 0 ? Math.min(0.999, ratio * 0.998) : 0.995;
-        const nextScale = Math.max(0.04, scale * fix);
-        if (Math.abs(nextScale - scale) < 0.0001) {
-          scale = Math.max(0.04, scale * 0.995);
-        } else {
-          scale = nextScale;
+      // 세로를 가능한 한 꽉 채우는 최대 배율 탐색
+      const estimated = Math.min(safeW / base.w, safeH / base.h);
+      if (!Number.isFinite(estimated) || estimated <= 0) return;
+
+      let low = Math.max(0.05, estimated * 0.5);
+      let high = Math.max(0.1, estimated * 1.8);
+
+      let lowFit = testScale(low).fits;
+      if (!lowFit) {
+        let tries = 0;
+        while (!lowFit && tries < 12) {
+          low *= 0.8;
+          lowFit = testScale(low).fits;
+          tries += 1;
         }
-        page.style.setProperty('--print-scale', scale.toFixed(4));
+      }
+      if (!lowFit) {
+        const fallbackScale = Math.max(0.03, low);
+        page.style.setProperty('--print-scale', fallbackScale.toFixed(4));
+        applyCenteredOffset();
+        applyCenteredOffset();
+        return;
       }
 
+      let highResult = testScale(high);
+      let growGuard = 0;
+      while (highResult.fits && high < 4 && growGuard < 16) {
+        low = high;
+        high *= 1.12;
+        highResult = testScale(high);
+        growGuard += 1;
+      }
+
+      for (let i = 0; i < 24; i += 1) {
+        const mid = (low + high) / 2;
+        const midResult = testScale(mid);
+        if (midResult.fits) {
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+
+      const finalScale = Math.max(0.03, low * 0.999);
+      page.style.setProperty('--print-scale', finalScale.toFixed(4));
+      applyCenteredOffset();
       applyCenteredOffset();
     });
   };
