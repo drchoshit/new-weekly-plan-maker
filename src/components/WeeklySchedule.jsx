@@ -156,58 +156,6 @@ export default function WeeklySchedule({
     return { w, h };
   };
 
-  const getContentBounds = (root) => {
-    const rootRect = root.getBoundingClientRect();
-    let maxRight = rootRect.right;
-    let maxBottom = rootRect.bottom;
-    const nodes = root.querySelectorAll('*');
-    for (let i = 0; i < nodes.length; i += 1) {
-      const el = nodes[i];
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
-      const cs = window.getComputedStyle(el);
-      const mr = parseFloat(cs.marginRight) || 0;
-      const mb = parseFloat(cs.marginBottom) || 0;
-      if (r.right + mr > maxRight) maxRight = r.right + mr;
-      if (r.bottom + mb > maxBottom) maxBottom = r.bottom + mb;
-    }
-    return {
-      w: Math.max(0, maxRight - rootRect.left),
-      h: Math.max(0, maxBottom - rootRect.top),
-    };
-  };
-
-  const getRenderedBounds = (root) => {
-    const rootRect = root.getBoundingClientRect();
-    let minLeft = rootRect.left;
-    let minTop = rootRect.top;
-    let maxRight = rootRect.right;
-    let maxBottom = rootRect.bottom;
-    const nodes = [root, ...root.querySelectorAll('*')];
-    for (let i = 0; i < nodes.length; i += 1) {
-      const el = nodes[i];
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) continue;
-      const cs = window.getComputedStyle(el);
-      const ml = parseFloat(cs.marginLeft) || 0;
-      const mt = parseFloat(cs.marginTop) || 0;
-      const mr = parseFloat(cs.marginRight) || 0;
-      const mb = parseFloat(cs.marginBottom) || 0;
-      if (r.left - ml < minLeft) minLeft = r.left - ml;
-      if (r.top - mt < minTop) minTop = r.top - mt;
-      if (r.right + mr > maxRight) maxRight = r.right + mr;
-      if (r.bottom + mb > maxBottom) maxBottom = r.bottom + mb;
-    }
-    return {
-      minLeft,
-      minTop,
-      maxRight,
-      maxBottom,
-      w: Math.max(0, maxRight - minLeft),
-      h: Math.max(0, maxBottom - minTop),
-    };
-  };
-
   const applyPrintScaling = () => {
     const isPrintMode = window.matchMedia && window.matchMedia('print').matches;
     if (!isPrintingRef.current && !isPrintMode) return;
@@ -215,10 +163,9 @@ export default function WeeklySchedule({
     const pages = document.querySelectorAll('#print-area .print-page');
     if (!pages.length) return;
 
-    const isPrint = isPrintMode;
     const pxPerMm = getPxPerMm();
-    const fallbackW = 297 * pxPerMm; // A4 가로 전체
-    const fallbackH = 210 * pxPerMm; // A4 세로 전체
+    const fallbackW = 210 * pxPerMm; // A4 세로 너비
+    const fallbackH = 297 * pxPerMm; // A4 세로 높이
 
     pages.forEach((page) => {
       const scaleTarget = page.querySelector('.print-scale');
@@ -231,92 +178,36 @@ export default function WeeklySchedule({
       const contentRect = getPageContentRect(page);
       const fallbackInnerW = Math.max(0, fallbackW - 24);
       const fallbackInnerH = Math.max(0, fallbackH - 24);
-      const safeW = Math.max(0, (isPrint ? contentRect.w : fallbackInnerW) - 8);
-      const safeH = Math.max(0, (isPrint ? contentRect.h : fallbackInnerH) - 8);
+      const measuredW = contentRect.w;
+      const measuredH = contentRect.h;
+      const usableW =
+        Number.isFinite(measuredW) && measuredW > fallbackInnerW * 0.55
+          ? measuredW
+          : fallbackInnerW;
+      const usableH =
+        Number.isFinite(measuredH) && measuredH > fallbackInnerH * 0.55
+          ? measuredH
+          : fallbackInnerH;
+
+      const safeW = Math.max(0, usableW - 8);
+      const safeH = Math.max(0, usableH - 8);
       if (!safeW || !safeH) return;
 
-      const safeLeft = contentRect.left + 2;
-      const safeRight = contentRect.right - 2;
-      const safeBottom = contentRect.bottom - 14;
+      const natural = getContentSize(scaleTarget);
+      if (!natural.w || !natural.h) return;
 
-      const base = getContentBounds(scaleTarget);
-      if (!base.w || !base.h) return;
-
-      const applyCenteredOffset = () => {
-        const b = getRenderedBounds(scaleTarget);
-        const freeW = Math.max(0, safeW - b.w);
-        const desiredLeft = safeLeft + freeW / 2;
-        const rawOffset = desiredLeft - b.minLeft;
-        const minOffset = safeLeft - b.minLeft;
-        const maxOffset = safeRight - b.maxRight;
-        const offsetX = Math.max(Math.min(rawOffset, maxOffset), minOffset);
-        page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
-        return b;
-      };
-
-      const testScale = (candidate) => {
-        page.style.setProperty('--print-scale', candidate.toFixed(4));
-        applyCenteredOffset();
-        applyCenteredOffset();
-        const fitted = getRenderedBounds(scaleTarget);
-        const overflowLeft = Math.max(0, safeLeft - fitted.minLeft);
-        const overflowRight = Math.max(0, fitted.maxRight - safeRight);
-        const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
-        return {
-          fits: overflowLeft <= 0.1 && overflowRight <= 0.1 && overflowBottom <= 0.1,
-          fitted,
-        };
-      };
-
-      // 세로를 최대한 채우는 "최대 적합 스케일" 탐색
-      const rough = Math.min(safeW / base.w, safeH / base.h);
+      // margin/폰트 반올림 오차를 감안해 소폭 안전계수 적용
+      const targetW = natural.w * 1.02;
+      const targetH = natural.h * 1.03;
+      const rough = Math.min(safeW / targetW, safeH / targetH);
       if (!Number.isFinite(rough) || rough <= 0) return;
 
-      let low = Math.max(0.05, rough * 0.7);
-      let high = Math.max(low * 1.2, rough * 1.8);
+      const finalScale = Math.max(0.05, Math.min(rough * 0.997, 3));
+      const scaledW = targetW * finalScale;
+      const offsetX = Math.max(0, (safeW - scaledW) / 2);
 
-      // low가 안 맞으면 더 낮춰서 시작
-      let lowResult = testScale(low);
-      let lowGuard = 0;
-      while (!lowResult.fits && lowGuard < 12) {
-        low *= 0.8;
-        lowResult = testScale(low);
-        lowGuard += 1;
-      }
-      if (!lowResult.fits) return;
-
-      // high가 맞으면 upper bound를 더 올림
-      let highResult = testScale(high);
-      let highGuard = 0;
-      while (highResult.fits && high < 4 && highGuard < 16) {
-        low = high;
-        high *= 1.12;
-        highResult = testScale(high);
-        highGuard += 1;
-      }
-
-      for (let i = 0; i < 24; i += 1) {
-        const mid = (low + high) / 2;
-        const midResult = testScale(mid);
-        if (midResult.fits) low = mid;
-        else high = mid;
-      }
-
-      const finalScale = Math.max(0.05, low * 0.999);
-      testScale(finalScale);
-
-      // 인쇄 엔진 반올림 오차로 마지막 1~2px가 잘리는 경우 방지
-      let settleScale = finalScale;
-      for (let i = 0; i < 24; i += 1) {
-        const { fitted } = testScale(settleScale);
-        const overflowLeft = Math.max(0, safeLeft - fitted.minLeft);
-        const overflowRight = Math.max(0, fitted.maxRight - safeRight);
-        const overflowBottom = Math.max(0, fitted.maxBottom - safeBottom);
-        if (overflowLeft <= 0.05 && overflowRight <= 0.05 && overflowBottom <= 0.05) break;
-        settleScale = Math.max(0.04, settleScale * 0.995);
-      }
-
-      applyCenteredOffset();
+      page.style.setProperty('--print-scale', finalScale.toFixed(4));
+      page.style.setProperty('--print-offset-x', `${offsetX.toFixed(2)}px`);
     });
   };
 
