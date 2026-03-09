@@ -62,6 +62,47 @@
     grid-column: 2;
     min-width: 0;
   }
+  #print-area .print-mentors-table th,
+  #print-area .print-mentors-table td {
+    padding-top: 0.3rem !important;
+    padding-bottom: 0.3rem !important;
+    line-height: 1.15 !important;
+  }
+  #print-area .print-interview-layout {
+    gap: 0.5rem !important;
+  }
+  #print-area .print-problem-sheet {
+    padding: 0.35rem 0.45rem !important;
+  }
+  #print-area .print-problem-table th,
+  #print-area .print-problem-table td {
+    padding-top: 0.2rem !important;
+    padding-bottom: 0.2rem !important;
+    line-height: 1.1 !important;
+  }
+  #print-area .print-problem-table .print-problem-cell {
+    height: 28px !important;
+    min-height: 28px !important;
+  }
+  #print-area .print-interview-side {
+    gap: 0.35rem !important;
+  }
+  #print-area .print-mentor-box,
+  #print-area .print-vice-box {
+    padding: 0.35rem 0.4rem !important;
+  }
+  #print-area .print-mentor-box h3,
+  #print-area .print-vice-box h3 {
+    margin-bottom: 0.2rem !important;
+    line-height: 1.15 !important;
+  }
+  #print-area .print-mentor-box .text-sm {
+    margin-bottom: 0.2rem !important;
+    line-height: 1.15 !important;
+  }
+  #print-area .print-vice-fields {
+    gap: 0.2rem !important;
+  }
 
   /* 5) overflow 숨김 */
   .overflow-x-auto {

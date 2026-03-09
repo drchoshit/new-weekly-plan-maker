@@ -743,7 +743,7 @@ export default function WeeklySchedule({
 
         {/* 멘토표 */}
         {printOpts.mentors.enabled && (
-          <table className="w-full border-collapse text-center text-sm">
+          <table className="print-mentors-table w-full border-collapse text-center text-sm">
             <thead>
               <tr>
                 {mentorCols.map(c => (
@@ -779,8 +779,8 @@ export default function WeeklySchedule({
         {printOpts.interview.enabled && (
           <div className="print-interview-layout grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
             {/* 수기 작성용 표 */}
-            <div className="print-interview-left lg:col-span-9 border border-print-line rounded-sm p-2 bg-white">
-              <table className="w-full table-fixed border-collapse text-center text-sm">
+            <div className="print-interview-left print-problem-sheet lg:col-span-9 border border-print-line rounded-sm p-2 bg-white">
+              <table className="print-problem-table w-full table-fixed border-collapse text-center text-sm">
                 <colgroup>
                   <col className="w-20" />
                   {[1, 2, 3, 4, 5].map((n) => (
@@ -802,7 +802,7 @@ export default function WeeklySchedule({
                         {label}
                       </td>
                       {[1, 2, 3, 4, 5].map((n) => (
-                        <td key={`${label}-${n}`} className="border border-print-line h-[34px] py-1.5">
+                        <td key={`${label}-${n}`} className="print-problem-cell border border-print-line h-[34px] py-1.5">
                           &nbsp;
                         </td>
                       ))}
@@ -812,9 +812,9 @@ export default function WeeklySchedule({
               </table>
             </div>
 
-            <div className="print-interview-right lg:col-span-3 flex h-full min-h-0 flex-col gap-2">
+            <div className="print-interview-right print-interview-side lg:col-span-3 flex h-full min-h-0 flex-col gap-2">
               {/* 금주의 멘토 */}
-              <div className="border border-print-line rounded-sm p-2 bg-white">
+              <div className="print-mentor-box border border-print-line rounded-sm p-2 bg-white">
                 <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
 
                 <div className="text-sm text-center font-medium mb-1">
@@ -831,10 +831,10 @@ export default function WeeklySchedule({
               </div>
 
               {/* 부원장 인터뷰 (금주의 멘토 아래) */}
-              <div className="border border-print-line rounded-sm p-2 bg-white flex-1 flex flex-col justify-center">
+              <div className="print-vice-box border border-print-line rounded-sm p-2 bg-white flex-1 flex flex-col justify-center">
                 <h3 className="font-semibold mb-1 text-center">부원장 인터뷰</h3>
 
-                <div className="flex items-center gap-1">
+                <div className="print-vice-fields flex items-center gap-1">
                   <input
                     placeholder="요일"
                     value={ov.viceDirector?.day ?? selectedInterview?.day ?? ''}
