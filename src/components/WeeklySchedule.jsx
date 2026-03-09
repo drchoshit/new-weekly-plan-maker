@@ -151,8 +151,14 @@ export default function WeeklySchedule({
 
   const getContentSize = (el) => {
     const rect = el.getBoundingClientRect();
-    const w = Math.max(rect.width, el.scrollWidth, el.offsetWidth);
-    const h = Math.max(rect.height, el.scrollHeight, el.offsetHeight);
+    const baseW = Math.max(rect.width, el.offsetWidth, el.clientWidth);
+    const baseH = Math.max(rect.height, el.offsetHeight, el.clientHeight);
+    const scrollW = el.scrollWidth || 0;
+    const scrollH = el.scrollHeight || 0;
+
+    // 비정상적으로 큰 scrollWidth/Height가 전체를 극단적으로 축소시키는 문제 방지
+    const w = Math.max(baseW, scrollW > 0 && scrollW <= baseW * 1.3 ? scrollW : 0);
+    const h = Math.max(baseH, scrollH > 0 && scrollH <= baseH * 1.3 ? scrollH : 0);
     return { w, h };
   };
 
@@ -164,8 +170,8 @@ export default function WeeklySchedule({
     if (!pages.length) return;
 
     const pxPerMm = getPxPerMm();
-    const fallbackW = 210 * pxPerMm; // A4 세로 너비
-    const fallbackH = 297 * pxPerMm; // A4 세로 높이
+    const fallbackW = 297 * pxPerMm; // A4 가로 너비
+    const fallbackH = 210 * pxPerMm; // A4 가로 높이
 
     pages.forEach((page) => {
       const scaleTarget = page.querySelector('.print-scale');
