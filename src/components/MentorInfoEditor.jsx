@@ -80,6 +80,50 @@ const selectStyles = {
   }),
 };
 
+const multiSelectStyles = {
+  ...selectStyles,
+  control: (base, state) => ({
+    ...selectStyles.control(base, state),
+    minHeight: 36,
+    height: "auto",
+  }),
+  valueContainer: base => ({
+    ...selectStyles.valueContainer(base),
+    height: "auto",
+    minHeight: 36,
+    paddingTop: 2,
+    paddingBottom: 2,
+  }),
+  indicatorsContainer: base => ({
+    ...selectStyles.indicatorsContainer(base),
+    height: "auto",
+    minHeight: 36,
+  }),
+};
+
+const splitMultiValues = value =>
+  String(value ?? "")
+    .split(",")
+    .map(v => v.trim())
+    .filter(Boolean);
+
+const getSelectValue = (options, value, isMulti = false) => {
+  if (isMulti) {
+    const set = new Set(splitMultiValues(value));
+    return options.filter(opt => set.has(opt.value));
+  }
+  return options.find(opt => opt.value === value) || null;
+};
+
+const getSelectDraftValue = (selected, isMulti = false) => {
+  if (isMulti) {
+    return Array.isArray(selected)
+      ? selected.map(opt => opt?.value).filter(Boolean).join(", ")
+      : "";
+  }
+  return selected?.value || "";
+};
+
 const serializeByDay = byDay => JSON.stringify(normalizeMentorsByDay(byDay));
 
 export default function MentorInfoEditor({
@@ -92,6 +136,7 @@ export default function MentorInfoEditor({
   jsonFileName = "mentor_info.json",
   jsonScope = "mentorInfo",
   buildDownloadPayload,
+  allowMultiSubjectSelection = false,
 }) {
   const [mentorDrafts, setMentorDrafts] = useState(() =>
     buildMentorDraftsFromByDay(mentorsByDay)
@@ -316,68 +361,104 @@ export default function MentorInfoEditor({
                     <div className="min-w-0">
                       <Select
                         options={MATH_OPTIONS}
-                        value={
-                          MATH_OPTIONS.find(opt => opt.value === mentor.mathSubject) || null
-                        }
+                        value={getSelectValue(
+                          MATH_OPTIONS,
+                          mentor.mathSubject,
+                          allowMultiSubjectSelection
+                        )}
                         onChange={selected =>
                           updateDraft(mentor.id, draft => ({
                             ...draft,
-                            mathSubject: selected?.value || "",
+                            mathSubject: getSelectDraftValue(
+                              selected,
+                              allowMultiSubjectSelection
+                            ),
                           }))
                         }
+                        isMulti={allowMultiSubjectSelection}
+                        closeMenuOnSelect={!allowMultiSubjectSelection}
                         placeholder="수학선택"
-                        styles={selectStyles}
+                        styles={
+                          allowMultiSubjectSelection ? multiSelectStyles : selectStyles
+                        }
                         menuPortalTarget={document.body}
                       />
                     </div>
                     <div className="min-w-0">
                       <Select
                         options={KOREAN_OPTIONS}
-                        value={
-                          KOREAN_OPTIONS.find(opt => opt.value === mentor.koreanSubject) || null
-                        }
+                        value={getSelectValue(
+                          KOREAN_OPTIONS,
+                          mentor.koreanSubject,
+                          allowMultiSubjectSelection
+                        )}
                         onChange={selected =>
                           updateDraft(mentor.id, draft => ({
                             ...draft,
-                            koreanSubject: selected?.value || "",
+                            koreanSubject: getSelectDraftValue(
+                              selected,
+                              allowMultiSubjectSelection
+                            ),
                           }))
                         }
+                        isMulti={allowMultiSubjectSelection}
+                        closeMenuOnSelect={!allowMultiSubjectSelection}
                         placeholder="국어선택"
-                        styles={selectStyles}
+                        styles={
+                          allowMultiSubjectSelection ? multiSelectStyles : selectStyles
+                        }
                         menuPortalTarget={document.body}
                       />
                     </div>
                     <div className="min-w-0">
                       <Select
                         options={EXPLORE_OPTIONS}
-                        value={
-                          EXPLORE_OPTIONS.find(opt => opt.value === mentor.explore1) || null
-                        }
+                        value={getSelectValue(
+                          EXPLORE_OPTIONS,
+                          mentor.explore1,
+                          allowMultiSubjectSelection
+                        )}
                         onChange={selected =>
                           updateDraft(mentor.id, draft => ({
                             ...draft,
-                            explore1: selected?.value || "",
+                            explore1: getSelectDraftValue(
+                              selected,
+                              allowMultiSubjectSelection
+                            ),
                           }))
                         }
+                        isMulti={allowMultiSubjectSelection}
+                        closeMenuOnSelect={!allowMultiSubjectSelection}
                         placeholder="탐구선택1"
-                        styles={selectStyles}
+                        styles={
+                          allowMultiSubjectSelection ? multiSelectStyles : selectStyles
+                        }
                         menuPortalTarget={document.body}
                       />
                     </div>
                     <div className="min-w-0">
                       <Select
                         options={EXPLORE_OPTIONS}
-                        value={
-                          EXPLORE_OPTIONS.find(opt => opt.value === mentor.explore2) || null
-                        }
+                        value={getSelectValue(
+                          EXPLORE_OPTIONS,
+                          mentor.explore2,
+                          allowMultiSubjectSelection
+                        )}
                         onChange={selected =>
                           updateDraft(mentor.id, draft => ({
                             ...draft,
-                            explore2: selected?.value || "",
+                            explore2: getSelectDraftValue(
+                              selected,
+                              allowMultiSubjectSelection
+                            ),
                           }))
                         }
+                        isMulti={allowMultiSubjectSelection}
+                        closeMenuOnSelect={!allowMultiSubjectSelection}
                         placeholder="탐구선택2"
-                        styles={selectStyles}
+                        styles={
+                          allowMultiSubjectSelection ? multiSelectStyles : selectStyles
+                        }
                         menuPortalTarget={document.body}
                       />
                     </div>

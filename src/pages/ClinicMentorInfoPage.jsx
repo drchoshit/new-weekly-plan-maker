@@ -20,6 +20,7 @@ export default function ClinicMentorInfoPage() {
         onMentorsByDayChange={setClinicMentorsByDay}
         sessionTitle="클리닉 멘토 등록 세션"
         summaryTitle="🗓️ 클리닉 멘토 근무시간 요약"
+        allowMultiSubjectSelection
         showJsonDownload
         jsonDownloadLabel="총괄/클리닉 멘토 info 다운로드"
         jsonFileName="total_clinic_mentor_info.json"
