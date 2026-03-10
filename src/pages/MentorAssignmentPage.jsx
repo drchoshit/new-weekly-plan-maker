@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
@@ -139,6 +139,44 @@ const mentorProfiles = byDay => {
   return map;
 };
 
+const DAY_SET = new Set(DAYS);
+const toClock = minutes => {
+  const safe = ((Math.floor(minutes) % 1440) + 1440) % 1440;
+  const h = String(Math.floor(safe / 60)).padStart(2, "0");
+  const m = String(safe % 60).padStart(2, "0");
+  return `${h}:${m}`;
+};
+const normalizeTimeRangePair = value => {
+  const p = pair(value);
+  if (!p) return null;
+  const st = toMin(p[0]);
+  let en = toMin(p[1]);
+  if (Number.isNaN(st) || Number.isNaN(en)) return null;
+  if (en < st) en += 1440;
+  return { st, en };
+};
+const overlapRange = (aStart, aEnd, bStart, bEnd) =>
+  Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+const buildSlotsFromMentorTime = (mentorTime, durationMinutes) => {
+  const duration = Math.max(10, Number(durationMinutes) || 20);
+  const out = [];
+  ranges(mentorTime).forEach(r => {
+    let cur = r.st;
+    while (cur + duration <= r.en) {
+      out.push({
+        start: toClock(cur),
+        end: toClock(cur + duration),
+        startMin: cur,
+        endMin: cur + duration,
+      });
+      cur += duration;
+    }
+  });
+  return out;
+};
+const countSlotsFromMentorTime = (mentorTime, durationMinutes) =>
+  buildSlotsFromMentorTime(mentorTime, durationMinutes).length;
+
 export default function MentorAssignmentPage() {
   const {
     students,
@@ -153,8 +191,17 @@ export default function MentorAssignmentPage() {
   } = useSchedule();
 
   const [maxPerMentor, setMaxPerMentor] = useState(6);
+  const [sessionDuration, setSessionDuration] = useState(() => {
+    const saved = Number(localStorage.getItem("mentorSessionDuration"));
+    return Number.isFinite(saved) && saved >= 10 ? saved : 20;
+  });
   const [popup, setPopup] = useState({ title: "", text: "" });
   const closePopup = () => setPopup({ title: "", text: "" });
+  const minOverlapRequired = Math.max(10, Number(sessionDuration) || 20);
+
+  useEffect(() => {
+    localStorage.setItem("mentorSessionDuration", String(minOverlapRequired));
+  }, [minOverlapRequired]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
   const prevPeriodId = useMemo(() => {
@@ -251,7 +298,7 @@ export default function MentorAssignmentPage() {
       if (!sTime) continue;
       const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === mentor);
       if (!entries.length) continue;
-      if (entries.some(entry => overlap(sTime, mTime(entry)) >= 30)) return true;
+      if (entries.some(entry => overlap(sTime, mTime(entry)) >= minOverlapRequired)) return true;
     }
     return false;
   };
@@ -281,7 +328,7 @@ export default function MentorAssignmentPage() {
         );
         if (!compatible.length) return;
         const ov = compatible.reduce((mx, e) => Math.max(mx, overlap(sTime, mTime(e))), 0);
-        if (ov < 30) return; // 1순위 필수
+        if (ov < minOverlapRequired) return; // 1순위 필수
         const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
         const pScore = prev?.day ? periodPriority(gap) : 0;
         if (prev?.day && pScore === null) return; // 최소 5일 간격
@@ -404,17 +451,71 @@ export default function MentorAssignmentPage() {
       (a, b) => (byStudent[a.id].length || 0) - (byStudent[b.id].length || 0)
     );
     const loads = {};
+    const dayLoads = {};
+    const dayCaps = {};
     const pick = {};
+    const keyByMentorDay = (mentor, day) => `${n(mentor)}@@${n(day)}`;
+
+    DAYS.forEach(day => {
+      (mentorsByDay?.[day] || []).forEach(entry => {
+        const mentor = n(entry?.name);
+        if (!mentor) return;
+        const key = keyByMentorDay(mentor, day);
+        dayCaps[key] =
+          (dayCaps[key] || 0) + countSlotsFromMentorTime(mTime(entry), minOverlapRequired);
+      });
+    });
 
     order.forEach(s => {
       const fixed = n(s?.fixedMentor);
       const base = byStudent[s.id] || [];
       const avail = base.filter(c => (loads[c.mentor] || 0) < Number(maxPerMentor));
       const ranks = (avail.length ? avail : base).slice(0, 5);
-      const chosen = fixed
-        ? { mentor: fixed, day: resolveFixedMentorDay(s) }
-        : avail[0] || null;
-      if (chosen) loads[chosen.mentor] = (loads[chosen.mentor] || 0) + 1;
+      const pool = avail.length ? avail : base;
+      const orderMap = new Map();
+      base.forEach((c, idx) => orderMap.set(`${c.mentor}@@${c.day}`, idx));
+      const sortedPool = [...pool].sort((a, b) => {
+        const keyA = keyByMentorDay(a.mentor, a.day);
+        const keyB = keyByMentorDay(b.mentor, b.day);
+
+        const loadA = dayLoads[keyA] || 0;
+        const loadB = dayLoads[keyB] || 0;
+        const capA = dayCaps[keyA] || 0;
+        const capB = dayCaps[keyB] || 0;
+        const ratioA = capA > 0 ? loadA / capA : loadA + 999;
+        const ratioB = capB > 0 ? loadB / capB : loadB + 999;
+        if (ratioA !== ratioB) return ratioA - ratioB;
+        if (loadA !== loadB) return loadA - loadB;
+
+        const mentorLoadA = loads[a.mentor] || 0;
+        const mentorLoadB = loads[b.mentor] || 0;
+        if (mentorLoadA !== mentorLoadB) return mentorLoadA - mentorLoadB;
+
+        const idxA = orderMap.get(`${a.mentor}@@${a.day}`) ?? 999;
+        const idxB = orderMap.get(`${b.mentor}@@${b.day}`) ?? 999;
+        if (idxA !== idxB) return idxA - idxB;
+        return String(a.day || "").localeCompare(String(b.day || ""), "ko");
+      });
+
+      let chosen = null;
+      if (fixed) {
+        const fixedPool = sortedPool.filter(c => c.mentor === fixed);
+        if (fixedPool.length) {
+          chosen = fixedPool[0];
+        } else {
+          chosen = { mentor: fixed, day: resolveFixedMentorDay(s) };
+        }
+      } else {
+        chosen = sortedPool[0] || null;
+      }
+
+      if (chosen) {
+        loads[chosen.mentor] = (loads[chosen.mentor] || 0) + 1;
+        if (chosen.day) {
+          const dKey = keyByMentorDay(chosen.mentor, chosen.day);
+          dayLoads[dKey] = (dayLoads[dKey] || 0) + 1;
+        }
+      }
       pick[s.id] = { ranks, chosen };
     });
 
@@ -486,7 +587,7 @@ export default function MentorAssignmentPage() {
       title: "자동 배정 완료",
       text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
         students.length - assignableStudents.length
-      }명\n최대 인원: ${maxPerMentor}명\n\n${lines || "배정 없음"}`,
+      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n\n${lines || "배정 없음"}`,
     });
   };
 
@@ -595,7 +696,7 @@ export default function MentorAssignmentPage() {
       const m = (mentorsByDay?.[day] || []).find(v => n(v?.name) === mentor);
       const ov = overlap(periodAttendance?.[student.id]?.[day], mTime(m));
       const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
-      const ok = ov >= 30 && (!prev?.day || (gap && gap >= 5));
+      const ok = ov >= minOverlapRequired && (!prev?.day || (gap && gap >= 5));
       if (ok) pass = true;
       lines.push(
         `${day}: 겹침 ${ov}분 / 간격 ${prev?.day ? `${gap || 0}일` : "N/A"} / ${ok ? "적합" : "부적합"}`
@@ -628,39 +729,171 @@ export default function MentorAssignmentPage() {
     );
   };
 
-  const byDay = useMemo(() => {
-    const r = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
-    students.forEach(s => {
-      const mentor = activeMentor(s);
-      if (!mentor) return;
-      const selectedDay =
-        n(s?.mentorHistory?.[selectedPeriod]?.day) || n(s?.selectedMentorDay);
+  const mentoringTimelineByDay = useMemo(() => {
+    const result = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
+    const mentorSlotsByDay = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
 
-      if (selectedDay) {
-        const bucket = r[selectedDay];
-        if (!bucket) return;
-        const ov = overlap(
-          periodAttendance?.[s.id]?.[selectedDay],
-          mTime((mentorsByDay?.[selectedDay] || []).find(m => n(m.name) === mentor))
+    DAYS.forEach(day => {
+      (mentorsByDay?.[day] || []).forEach(entry => {
+        const mentor = n(entry?.name);
+        if (!mentor) return;
+        if (!mentorSlotsByDay[day][mentor]) mentorSlotsByDay[day][mentor] = [];
+        mentorSlotsByDay[day][mentor].push(
+          ...buildSlotsFromMentorTime(mTime(entry), minOverlapRequired)
         );
-        if (ov < 30) return;
-        if (!bucket[mentor]) bucket[mentor] = [];
-        bucket[mentor].push(s.name);
-        return;
-      }
+      });
 
-      workingDays(mentor, mentorsByDay).forEach(day => {
-        const ov = overlap(
-          periodAttendance?.[s.id]?.[day],
-          mTime((mentorsByDay?.[day] || []).find(m => n(m.name) === mentor))
+      Object.keys(mentorSlotsByDay[day]).forEach(mentor => {
+        mentorSlotsByDay[day][mentor].sort(
+          (a, b) => a.startMin - b.startMin || a.endMin - b.endMin
         );
-        if (ov < 30) return;
-        if (!r[day][mentor]) r[day][mentor] = [];
-        r[day][mentor].push(s.name);
       });
     });
-    return r;
-  }, [students, mentorsByDay, periodAttendance, selectedPeriod]);
+
+    const resolveAssignedDay = (student, mentor) => {
+      const explicitDay =
+        n(student?.mentorHistory?.[selectedPeriod]?.day) || n(student?.selectedMentorDay);
+      if (DAY_SET.has(explicitDay)) return explicitDay;
+
+      let best = { day: "", ov: -1 };
+      DAYS.forEach(day => {
+        const att = normalizeTimeRangePair(periodAttendance?.[student.id]?.[day]);
+        if (!att) return;
+        const entries = (mentorsByDay?.[day] || []).filter(v => n(v?.name) === mentor);
+        if (!entries.length) return;
+        const ov = entries.reduce(
+          (mx, entry) => Math.max(mx, overlap(periodAttendance?.[student.id]?.[day], mTime(entry))),
+          0
+        );
+        if (ov >= minOverlapRequired && ov > best.ov) {
+          best = { day, ov };
+        }
+      });
+      return best.day;
+    };
+
+    const studentsByMentorDay = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
+    students.forEach(student => {
+      if (isMentoringOptOut(student)) return;
+      const mentor = activeMentor(student);
+      if (!mentor) return;
+      const day = resolveAssignedDay(student, mentor);
+      if (!DAY_SET.has(day)) return;
+      if (!studentsByMentorDay[day][mentor]) studentsByMentorDay[day][mentor] = [];
+      studentsByMentorDay[day][mentor].push(student);
+    });
+
+    DAYS.forEach(day => {
+      const mentorSet = new Set([
+        ...Object.keys(mentorSlotsByDay[day] || {}),
+        ...Object.keys(studentsByMentorDay[day] || {}),
+      ]);
+
+      mentorSet.forEach(mentor => {
+        const slots = (mentorSlotsByDay[day]?.[mentor] || []).map(slot => ({
+          ...slot,
+          studentId: null,
+          studentName: "",
+        }));
+        const requestStudents = studentsByMentorDay[day]?.[mentor] || [];
+
+        const requests = requestStudents
+          .map(student => {
+            const att = normalizeTimeRangePair(periodAttendance?.[student.id]?.[day]);
+            if (!att) {
+              return {
+                studentId: student.id,
+                studentName: student.name,
+                attStart: 9999,
+                eligible: [],
+              };
+            }
+
+            const eligible = [];
+            slots.forEach((slot, idx) => {
+              const ov = overlapRange(att.st, att.en, slot.startMin, slot.endMin);
+              if (ov >= minOverlapRequired) eligible.push(idx);
+            });
+
+            return {
+              studentId: student.id,
+              studentName: student.name,
+              attStart: att.st,
+              eligible,
+            };
+          })
+          .sort((a, b) => {
+            if (a.eligible.length !== b.eligible.length) return a.eligible.length - b.eligible.length;
+            if (a.attStart !== b.attStart) return a.attStart - b.attStart;
+            return String(a.studentName || "").localeCompare(String(b.studentName || ""), "ko");
+          });
+
+        const used = new Set();
+        const unassigned = [];
+        requests.forEach(req => {
+          let picked = -1;
+          for (const idx of req.eligible) {
+            if (!used.has(idx)) {
+              picked = idx;
+              break;
+            }
+          }
+          if (picked >= 0) {
+            used.add(picked);
+            slots[picked].studentId = req.studentId;
+            slots[picked].studentName = req.studentName;
+          } else {
+            unassigned.push(req.studentName);
+          }
+        });
+
+        result[day][mentor] = {
+          slots,
+          unassigned,
+          assignedCount: slots.filter(slot => slot.studentId).length,
+          requestCount: requests.length,
+        };
+      });
+    });
+
+    return result;
+  }, [students, mentorsByDay, periodAttendance, selectedPeriod, minOverlapRequired]);
+
+  const todayDayLabel = DAY_LABEL_BY_JS[new Date().getDay()] || "";
+  const todayMentoringRows = useMemo(() => {
+    if (!DAY_SET.has(todayDayLabel)) return [];
+    const rows = [];
+    const dayData = mentoringTimelineByDay?.[todayDayLabel] || {};
+    Object.entries(dayData).forEach(([mentor, info]) => {
+      (info?.slots || []).forEach(slot => {
+        if (!slot.studentName) return;
+        rows.push({
+          mentor,
+          start: slot.start,
+          end: slot.end,
+          studentName: slot.studentName,
+        });
+      });
+    });
+    rows.sort((a, b) => {
+      const t = toMin(a.start) - toMin(b.start);
+      if (t !== 0) return t;
+      return String(a.mentor || "").localeCompare(String(b.mentor || ""), "ko");
+    });
+    return rows;
+  }, [todayDayLabel, mentoringTimelineByDay]);
+
+  const todayUnassignedRows = useMemo(() => {
+    if (!DAY_SET.has(todayDayLabel)) return [];
+    const rows = [];
+    const dayData = mentoringTimelineByDay?.[todayDayLabel] || {};
+    Object.entries(dayData).forEach(([mentor, info]) => {
+      (info?.unassigned || []).forEach(studentName => {
+        rows.push({ mentor, studentName });
+      });
+    });
+    return rows;
+  }, [todayDayLabel, mentoringTimelineByDay]);
 
   const fixedMentorConflict = useMemo(() => {
     const map = {};
@@ -854,6 +1087,21 @@ export default function MentorAssignmentPage() {
             </option>
           ))}
         </select>
+        <label className="text-sm font-medium">멘토링 1회 시간</label>
+        <select
+          className="border rounded px-2 py-1"
+          value={minOverlapRequired}
+          onChange={e => setSessionDuration(Number(e.target.value))}
+        >
+          {[15, 20, 25, 30, 40].map(v => (
+            <option key={v} value={v}>
+              {v}분
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-gray-600">
+          요일/시간 배정 최소 겹침: {minOverlapRequired}분
+        </span>
         <button onClick={autoAssign} className="bg-blue-600 text-white px-4 py-2 rounded">
           멘토 배정하기
         </button>
@@ -1052,24 +1300,84 @@ export default function MentorAssignmentPage() {
       </div>
 
       <div>
-        <h2 className="text-xl font-semibold mb-2">요일별 멘토링 진행 현황표</h2>
+        <h2 className="text-xl font-semibold mb-2">
+          오늘 멘토링 시간표 {DAY_SET.has(todayDayLabel) ? `(${todayDayLabel}요일)` : ""}
+        </h2>
+        <div className="border rounded p-3 bg-white shadow-sm">
+          {!DAY_SET.has(todayDayLabel) ? (
+            <div className="text-sm text-gray-500">
+              오늘은 정규 멘토링 요일(월~토)이 아닙니다.
+            </div>
+          ) : todayMentoringRows.length === 0 ? (
+            <div className="text-sm text-gray-400">오늘 배정된 멘토링이 없습니다.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border px-2 py-1 text-left">시간</th>
+                    <th className="border px-2 py-1 text-left">멘토</th>
+                    <th className="border px-2 py-1 text-left">학생</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayMentoringRows.map((row, idx) => (
+                    <tr key={`today-${row.mentor}-${row.start}-${row.studentName}-${idx}`}>
+                      <td className="border px-2 py-1">{row.start}~{row.end}</td>
+                      <td className="border px-2 py-1">{row.mentor}</td>
+                      <td className="border px-2 py-1">{row.studentName}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {todayUnassignedRows.length > 0 ? (
+            <div className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+              시간 슬롯 미배정:{" "}
+              {todayUnassignedRows.map(r => `${r.mentor}-${r.studentName}`).join(", ")}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold mb-2">요일별 멘토링 진행 현황표 (시간대 기준)</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {DAYS.map(day => (
             <div key={day} className="border rounded p-3 bg-white shadow-sm">
               <h3 className="font-bold mb-2">{day}요일</h3>
-              {Object.keys(byDay[day] || {}).length === 0 ? (
+              {Object.keys(mentoringTimelineByDay[day] || {}).length === 0 ? (
                 <div className="text-sm text-gray-400">배정 없음</div>
               ) : (
-                Object.entries(byDay[day]).map(([mentor, names]) => (
+                Object.entries(mentoringTimelineByDay[day])
+                  .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
+                  .map(([mentor, info]) => (
                   <div key={mentor} className="mb-2">
                     <div className="font-semibold text-sm">
-                      {mentor} ({names.length}명)
+                      {mentor} ({info.assignedCount}/{info.requestCount}명)
                     </div>
-                    <ul className="list-disc pl-5 text-sm">
-                      {names.map(name => (
-                        <li key={`${day}-${mentor}-${name}`}>{name}</li>
-                      ))}
-                    </ul>
+                    {(info?.slots || []).length > 0 ? (
+                      <ul className="text-sm space-y-0.5 mt-1">
+                        {info.slots.map((slot, idx) => (
+                          <li key={`${day}-${mentor}-${slot.start}-${idx}`}>
+                            <span className="inline-block min-w-[96px] text-gray-600">
+                              {slot.start}~{slot.end}
+                            </span>
+                            <span>{slot.studentName || "빈 슬롯"}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="text-xs text-gray-500 mt-1">
+                        멘토 근무 시간이 설정되지 않아 시간 슬롯을 만들 수 없습니다.
+                      </div>
+                    )}
+                    {info.unassigned.length > 0 ? (
+                      <div className="text-xs text-red-600 mt-1">
+                        미배정: {info.unassigned.join(", ")}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}
@@ -1098,7 +1406,13 @@ export default function MentorAssignmentPage() {
                   <td className="border px-2 py-2 font-medium">{s.name}</td>
                   {DAYS.map(day => {
                     const mentor = activeMentor(s);
-                    const hasMentoring = mentor && workingDays(mentor, mentorsByDay).includes(day);
+                    const selectedMentoringDay =
+                      n(s?.mentorHistory?.[selectedPeriod]?.day) || n(s?.selectedMentorDay);
+                    const hasMentoring = mentor && (
+                      selectedMentoringDay
+                        ? selectedMentoringDay === day
+                        : workingDays(mentor, mentorsByDay).includes(day)
+                    );
                     const hasPlanner = (plannerScheduleByDay?.[day] || []).some(
                       v => String(v?.studentId) === String(s.id)
                     );
@@ -1314,3 +1628,4 @@ export default function MentorAssignmentPage() {
     </div>
   );
 }
+
