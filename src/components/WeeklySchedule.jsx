@@ -19,6 +19,7 @@ export default function WeeklySchedule({
   const {
     students, setStudents,
     mentorsByDay,
+    clinicMentorsByDay,
     plannerScheduleByDay,
     scheduleByDay,
     plannerMessage, setPlannerMessage,
@@ -652,8 +653,9 @@ export default function WeeklySchedule({
     // ✅ 현재 학생의 오버라이드 값
     const ov = getForStudent(student.id);
 
+    // 인쇄 상단 멘토표는 클리닉 멘토 근무표를 기준으로 표시
     const mentorCols = days.flatMap((day) => {
-      const list = mentorsByDay[day] || [];
+      const list = clinicMentorsByDay?.[day] || [];
       return list.map((m, idx) => ({ day, idx, info: m || {} }));
     }).filter((c) => c.info.name);
 
