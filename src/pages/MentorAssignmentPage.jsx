@@ -69,7 +69,10 @@ const pair = v => {
     const b = n(v[1]);
     return a && b ? [a, b] : null;
   }
-  const s = n(v).replace(/\s+/g, "");
+  const s = n(v)
+    .replace(/[∼〜～]/g, "~")
+    .replace(/[–—−]/g, "-")
+    .replace(/\s+/g, "");
   if (!s) return null;
   const d = s.includes("~") ? "~" : s.includes("-") ? "-" : null;
   if (!d) return null;
@@ -78,7 +81,9 @@ const pair = v => {
 };
 const ranges = raw =>
   String(raw || "")
-    .split(",")
+    .replace(/[∼〜～]/g, "~")
+    .replace(/[–—−]/g, "-")
+    .split(/[,/|\n]+/)
     .map(v => n(v).replace(/\s+/g, ""))
     .filter(Boolean)
     .map(v => {
@@ -174,8 +179,41 @@ const buildSlotsFromMentorTime = (mentorTime, durationMinutes) => {
   });
   return out;
 };
-const countSlotsFromMentorTime = (mentorTime, durationMinutes) =>
-  buildSlotsFromMentorTime(mentorTime, durationMinutes).length;
+const runMaxFlow = (capacity, adjacency, source, sink) => {
+  const parent = Array(capacity.length).fill(-1);
+
+  while (true) {
+    const visited = Array(capacity.length).fill(false);
+    const queue = [source];
+    visited[source] = true;
+    parent.fill(-1);
+
+    while (queue.length && !visited[sink]) {
+      const u = queue.shift();
+      for (const v of adjacency[u]) {
+        if (!visited[v] && capacity[u][v] > 0) {
+          visited[v] = true;
+          parent[v] = u;
+          queue.push(v);
+        }
+      }
+    }
+
+    if (!visited[sink]) break;
+
+    let flow = Infinity;
+    for (let v = sink; v !== source; v = parent[v]) {
+      const u = parent[v];
+      flow = Math.min(flow, capacity[u][v]);
+    }
+
+    for (let v = sink; v !== source; v = parent[v]) {
+      const u = parent[v];
+      capacity[u][v] -= flow;
+      capacity[v][u] += flow;
+    }
+  }
+};
 
 export default function MentorAssignmentPage() {
   const {
@@ -249,6 +287,9 @@ export default function MentorAssignmentPage() {
     delete old.manualMentor;
     delete old.rescheduleDate;
     delete old.rescheduleDay;
+    delete old.slotStart;
+    delete old.slotEnd;
+    delete old.sessionMinutes;
     return {
       ...student,
       selectedMentor: "",
@@ -330,8 +371,9 @@ export default function MentorAssignmentPage() {
         const ov = compatible.reduce((mx, e) => Math.max(mx, overlap(sTime, mTime(e))), 0);
         if (ov < minOverlapRequired) return; // 1순위 필수
         const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
-        const pScore = prev?.day ? periodPriority(gap) : 0;
-        if (prev?.day && pScore === null) return; // 최소 5일 간격
+        const rawPeriodScore = prev?.day ? periodPriority(gap) : 0;
+        const gapRuleMet = !prev?.day || rawPeriodScore !== null;
+        const pScore = gapRuleMet ? rawPeriodScore ?? 0 : 100;
 
         const p = profiles.get(name);
         const exp =
@@ -345,7 +387,8 @@ export default function MentorAssignmentPage() {
           day,
           ov,
           gap,
-          pScore: pScore ?? 0,
+          pScore,
+          gapRuleMet,
           exp,
           math,
         });
@@ -369,7 +412,11 @@ export default function MentorAssignmentPage() {
     const prev = prevRecord(student);
     return [
       `시간 겹침: ${c.ov}분`,
-        prev?.day ? `전주 요일 간격: ${prev.day} -> ${c.day} (${c.gap || 0}일)` : "전주 요일 기준 없음",
+      prev?.day
+        ? `전주 요일 간격: ${prev.day} -> ${c.day} (${c.gap || 0}일)${
+            c.gapRuleMet === false ? " [권장 간격 미달]" : ""
+          }`
+        : "전주 요일 기준 없음",
       `탐구 매칭: ${c.exp ? "일치" : "불일치"}`,
       `수학 매칭: ${c.math ? "일치" : "불일치"}`,
     ].join("\n");
@@ -395,6 +442,9 @@ export default function MentorAssignmentPage() {
               ...old,
               mentor: mentorName,
               day: pickedDay,
+              slotStart: undefined,
+              slotEnd: undefined,
+              sessionMinutes: undefined,
               attended: true,
               missedCarryOver: false,
               missedDay: undefined,
@@ -447,76 +497,201 @@ export default function MentorAssignmentPage() {
     assignableStudents.forEach(s => {
       byStudent[s.id] = buildCandidates(s);
     });
-    const order = [...assignableStudents].sort(
-      (a, b) => (byStudent[a.id].length || 0) - (byStudent[b.id].length || 0)
-    );
     const loads = {};
-    const dayLoads = {};
-    const dayCaps = {};
     const pick = {};
     const keyByMentorDay = (mentor, day) => `${n(mentor)}@@${n(day)}`;
+    const keyBySlot = (mentor, day, idx) => `${n(mentor)}@@${n(day)}@@${idx}`;
 
+    const mentorDaySlots = {};
     DAYS.forEach(day => {
       (mentorsByDay?.[day] || []).forEach(entry => {
         const mentor = n(entry?.name);
         if (!mentor) return;
-        const key = keyByMentorDay(mentor, day);
-        dayCaps[key] =
-          (dayCaps[key] || 0) + countSlotsFromMentorTime(mTime(entry), minOverlapRequired);
+        const mdKey = keyByMentorDay(mentor, day);
+        if (!mentorDaySlots[mdKey]) mentorDaySlots[mdKey] = [];
+        mentorDaySlots[mdKey].push(
+          ...buildSlotsFromMentorTime(mTime(entry), minOverlapRequired).map(slot => ({
+            ...slot,
+            mentor,
+            day,
+          }))
+        );
+      });
+    });
+    Object.keys(mentorDaySlots).forEach(key => {
+      mentorDaySlots[key].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+    });
+
+    const buildEligibleSlotRefs = (student, candidates) => {
+      const attByDay = periodAttendance?.[student.id] || {};
+      const slotMap = new Map();
+      (candidates || []).forEach(c => {
+        const mdKey = keyByMentorDay(c.mentor, c.day);
+        const slots = mentorDaySlots[mdKey] || [];
+        if (!slots.length) return;
+        const att = normalizeTimeRangePair(attByDay?.[c.day]);
+        if (!att) return;
+        slots.forEach((slot, idx) => {
+          const ov = overlapRange(att.st, att.en, slot.startMin, slot.endMin);
+          if (ov < minOverlapRequired) return;
+          const sKey = keyBySlot(c.mentor, c.day, idx);
+          const prevEntry = slotMap.get(sKey);
+          const nextEntry = {
+            key: sKey,
+            candidate: {
+              ...c,
+              ov: Math.max(c.ov || 0, ov),
+              slotStart: slot.start,
+              slotEnd: slot.end,
+              slotIndex: idx,
+            },
+          };
+          if (!prevEntry) {
+            slotMap.set(sKey, nextEntry);
+            return;
+          }
+          const prevScore =
+            (prevEntry.candidate?.pScore ?? 0) * 10000 +
+            (prevEntry.candidate?.exp ? 0 : 1000) +
+            (prevEntry.candidate?.math ? 0 : 100) -
+            (prevEntry.candidate?.ov ?? 0);
+          const nextScore =
+            (nextEntry.candidate?.pScore ?? 0) * 10000 +
+            (nextEntry.candidate?.exp ? 0 : 1000) +
+            (nextEntry.candidate?.math ? 0 : 100) -
+            (nextEntry.candidate?.ov ?? 0);
+          if (nextScore < prevScore) slotMap.set(sKey, nextEntry);
+        });
+      });
+      return Array.from(slotMap.values()).sort((a, b) => {
+        if ((a.candidate.pScore ?? 0) !== (b.candidate.pScore ?? 0)) {
+          return (a.candidate.pScore ?? 0) - (b.candidate.pScore ?? 0);
+        }
+        if (a.candidate.exp !== b.candidate.exp) return a.candidate.exp ? -1 : 1;
+        if (a.candidate.math !== b.candidate.math) return a.candidate.math ? -1 : 1;
+        if ((a.candidate.ov ?? 0) !== (b.candidate.ov ?? 0)) {
+          return (b.candidate.ov ?? 0) - (a.candidate.ov ?? 0);
+        }
+        if (a.candidate.mentor !== b.candidate.mentor) {
+          return String(a.candidate.mentor || "").localeCompare(String(b.candidate.mentor || ""), "ko");
+        }
+        if (a.candidate.day !== b.candidate.day) {
+          return DAYS.indexOf(a.candidate.day) - DAYS.indexOf(b.candidate.day);
+        }
+        return (a.candidate.slotIndex ?? 0) - (b.candidate.slotIndex ?? 0);
+      });
+    };
+
+    const effectiveCandidatesByStudent = {};
+    const studentEligibleSlotsById = {};
+
+    assignableStudents.forEach(s => {
+      const fixed = n(s?.fixedMentor);
+      const base = byStudent[s.id] || [];
+      const withSlots = base.filter(c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0);
+      const fixedPool = fixed ? withSlots.filter(c => c.mentor === fixed) : [];
+      const preferred = fixedPool.length ? fixedPool : withSlots;
+      const fallback = fixedPool.length ? withSlots : [];
+
+      let eligibleSlots = buildEligibleSlotRefs(s, preferred);
+      let rankPool = preferred;
+      if (!eligibleSlots.length && fallback.length) {
+        eligibleSlots = buildEligibleSlotRefs(s, fallback);
+        rankPool = fallback;
+      }
+
+      effectiveCandidatesByStudent[s.id] = rankPool;
+      studentEligibleSlotsById[s.id] = eligibleSlots;
+    });
+
+    const flowStudents = assignableStudents.filter(s => (studentEligibleSlotsById[s.id] || []).length > 0);
+    const slotKeys = Array.from(
+      new Set(flowStudents.flatMap(s => (studentEligibleSlotsById[s.id] || []).map(item => item.key)))
+    );
+    const mentorNamesFromFlow = Array.from(
+      new Set(slotKeys.map(key => String(key).split("@@")[0] || "").filter(Boolean))
+    );
+
+    const S = 0;
+    const studentStart = 1;
+    const slotStart = studentStart + flowStudents.length;
+    const mentorStart = slotStart + slotKeys.length;
+    const T = mentorStart + mentorNamesFromFlow.length;
+    const N = T + 1;
+
+    const cap = Array.from({ length: N }, () => Array(N).fill(0));
+    const adj = Array.from({ length: N }, () => []);
+    const studentNodeById = new Map();
+    const slotNodeByKey = new Map();
+    const mentorNodeByName = new Map();
+
+    const addEdge = (u, v, c) => {
+      if (!adj[u].includes(v)) adj[u].push(v);
+      if (!adj[v].includes(u)) adj[v].push(u);
+      cap[u][v] += c;
+    };
+
+    flowStudents.forEach((s, idx) => {
+      const node = studentStart + idx;
+      studentNodeById.set(s.id, node);
+      addEdge(S, node, 1);
+    });
+
+    slotKeys.forEach((key, idx) => {
+      slotNodeByKey.set(key, slotStart + idx);
+    });
+
+    mentorNamesFromFlow.forEach((name, idx) => {
+      const node = mentorStart + idx;
+      mentorNodeByName.set(name, node);
+      addEdge(node, T, Number(maxPerMentor));
+    });
+
+    slotKeys.forEach(key => {
+      const [mentor = ""] = String(key).split("@@");
+      const sNode = slotNodeByKey.get(key);
+      const mNode = mentorNodeByName.get(mentor);
+      if (sNode == null || mNode == null) return;
+      addEdge(sNode, mNode, 1);
+    });
+
+    flowStudents.forEach(s => {
+      const sNode = studentNodeById.get(s.id);
+      (studentEligibleSlotsById[s.id] || []).forEach(item => {
+        const slotNode = slotNodeByKey.get(item.key);
+        if (sNode == null || slotNode == null) return;
+        addEdge(sNode, slotNode, 1);
       });
     });
 
-    order.forEach(s => {
-      const fixed = n(s?.fixedMentor);
-      const base = byStudent[s.id] || [];
-      const avail = base.filter(c => (loads[c.mentor] || 0) < Number(maxPerMentor));
-      const ranks = (avail.length ? avail : base).slice(0, 5);
-      const pool = avail.length ? avail : base;
-      const orderMap = new Map();
-      base.forEach((c, idx) => orderMap.set(`${c.mentor}@@${c.day}`, idx));
-      const sortedPool = [...pool].sort((a, b) => {
-        const keyA = keyByMentorDay(a.mentor, a.day);
-        const keyB = keyByMentorDay(b.mentor, b.day);
+    runMaxFlow(cap, adj, S, T);
 
-        const loadA = dayLoads[keyA] || 0;
-        const loadB = dayLoads[keyB] || 0;
-        const capA = dayCaps[keyA] || 0;
-        const capB = dayCaps[keyB] || 0;
-        const ratioA = capA > 0 ? loadA / capA : loadA + 999;
-        const ratioB = capB > 0 ? loadB / capB : loadB + 999;
-        if (ratioA !== ratioB) return ratioA - ratioB;
-        if (loadA !== loadB) return loadA - loadB;
-
-        const mentorLoadA = loads[a.mentor] || 0;
-        const mentorLoadB = loads[b.mentor] || 0;
-        if (mentorLoadA !== mentorLoadB) return mentorLoadA - mentorLoadB;
-
-        const idxA = orderMap.get(`${a.mentor}@@${a.day}`) ?? 999;
-        const idxB = orderMap.get(`${b.mentor}@@${b.day}`) ?? 999;
-        if (idxA !== idxB) return idxA - idxB;
-        return String(a.day || "").localeCompare(String(b.day || ""), "ko");
-      });
-
-      let chosen = null;
-      if (fixed) {
-        const fixedPool = sortedPool.filter(c => c.mentor === fixed);
-        if (fixedPool.length) {
-          chosen = fixedPool[0];
-        } else {
-          chosen = { mentor: fixed, day: resolveFixedMentorDay(s) };
+    const chosenByStudent = new Map();
+    flowStudents.forEach(s => {
+      const sNode = studentNodeById.get(s.id);
+      const options = studentEligibleSlotsById[s.id] || [];
+      for (const item of options) {
+        const slotNode = slotNodeByKey.get(item.key);
+        if (sNode == null || slotNode == null) continue;
+        if (cap[slotNode][sNode] > 0) {
+          chosenByStudent.set(s.id, item.candidate);
+          break;
         }
-      } else {
-        chosen = sortedPool[0] || null;
       }
+    });
 
+    assignableStudents.forEach(s => {
+      const effective = effectiveCandidatesByStudent[s.id] || [];
+      const base = byStudent[s.id] || [];
+      const rankSource = effective.length ? effective : base;
+      const chosen = chosenByStudent.get(s.id) || null;
       if (chosen) {
         loads[chosen.mentor] = (loads[chosen.mentor] || 0) + 1;
-        if (chosen.day) {
-          const dKey = keyByMentorDay(chosen.mentor, chosen.day);
-          dayLoads[dKey] = (dayLoads[dKey] || 0) + 1;
-        }
       }
-      pick[s.id] = { ranks, chosen };
+      pick[s.id] = {
+        ranks: rankSource.slice(0, 5),
+        chosen,
+      };
     });
 
     setAssignments(
@@ -568,6 +743,9 @@ export default function MentorAssignmentPage() {
               ...old,
               mentor: chosen.mentor,
               day: chosen.day,
+              slotStart: chosen.slotStart,
+              slotEnd: chosen.slotEnd,
+              sessionMinutes: minOverlapRequired,
               attended: true,
               missedCarryOver: false,
               missedDay: undefined,
@@ -587,7 +765,9 @@ export default function MentorAssignmentPage() {
       title: "자동 배정 완료",
       text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
         students.length - assignableStudents.length
-      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n\n${lines || "배정 없음"}`,
+      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n배정 방식: 슬롯 기반 최대 배정\n\n${
+        lines || "배정 없음"
+      }`,
     });
   };
 
@@ -780,7 +960,11 @@ export default function MentorAssignmentPage() {
       const day = resolveAssignedDay(student, mentor);
       if (!DAY_SET.has(day)) return;
       if (!studentsByMentorDay[day][mentor]) studentsByMentorDay[day][mentor] = [];
-      studentsByMentorDay[day][mentor].push(student);
+      studentsByMentorDay[day][mentor].push({
+        student,
+        fixedSlotStart: n(student?.mentorHistory?.[selectedPeriod]?.slotStart),
+        fixedSlotEnd: n(student?.mentorHistory?.[selectedPeriod]?.slotEnd),
+      });
     });
 
     DAYS.forEach(day => {
@@ -798,7 +982,9 @@ export default function MentorAssignmentPage() {
         const requestStudents = studentsByMentorDay[day]?.[mentor] || [];
 
         const requests = requestStudents
-          .map(student => {
+          .map(item => {
+            const student = item?.student;
+            if (!student) return null;
             const att = normalizeTimeRangePair(periodAttendance?.[student.id]?.[day]);
             if (!att) {
               return {
@@ -806,6 +992,7 @@ export default function MentorAssignmentPage() {
                 studentName: student.name,
                 attStart: 9999,
                 eligible: [],
+                fixedIdx: -1,
               };
             }
 
@@ -815,13 +1002,35 @@ export default function MentorAssignmentPage() {
               if (ov >= minOverlapRequired) eligible.push(idx);
             });
 
+            let fixedIdx = -1;
+            const fixedStart = n(item?.fixedSlotStart);
+            const fixedEnd = n(item?.fixedSlotEnd);
+            if (fixedStart && fixedEnd) {
+              fixedIdx = slots.findIndex(
+                (slot, idx) =>
+                  slot.start === fixedStart && slot.end === fixedEnd && eligible.includes(idx)
+              );
+            }
+
             return {
               studentId: student.id,
               studentName: student.name,
               attStart: att.st,
               eligible,
+              fixedIdx,
             };
           })
+          .filter(Boolean);
+
+        const fixedRequests = requests
+          .filter(req => req.fixedIdx >= 0)
+          .sort((a, b) => {
+            if (a.fixedIdx !== b.fixedIdx) return a.fixedIdx - b.fixedIdx;
+            if (a.attStart !== b.attStart) return a.attStart - b.attStart;
+            return String(a.studentName || "").localeCompare(String(b.studentName || ""), "ko");
+          });
+        const flexibleRequests = requests
+          .filter(req => req.fixedIdx < 0)
           .sort((a, b) => {
             if (a.eligible.length !== b.eligible.length) return a.eligible.length - b.eligible.length;
             if (a.attStart !== b.attStart) return a.attStart - b.attStart;
@@ -830,7 +1039,24 @@ export default function MentorAssignmentPage() {
 
         const used = new Set();
         const unassigned = [];
-        requests.forEach(req => {
+
+        fixedRequests.forEach(req => {
+          if (!used.has(req.fixedIdx) && req.eligible.includes(req.fixedIdx)) {
+            used.add(req.fixedIdx);
+            slots[req.fixedIdx].studentId = req.studentId;
+            slots[req.fixedIdx].studentName = req.studentName;
+          } else {
+            flexibleRequests.push({ ...req, fixedIdx: -1 });
+          }
+        });
+
+        flexibleRequests
+          .sort((a, b) => {
+            if (a.eligible.length !== b.eligible.length) return a.eligible.length - b.eligible.length;
+            if (a.attStart !== b.attStart) return a.attStart - b.attStart;
+            return String(a.studentName || "").localeCompare(String(b.studentName || ""), "ko");
+          })
+          .forEach(req => {
           let picked = -1;
           for (const idx of req.eligible) {
             if (!used.has(idx)) {
@@ -985,6 +1211,9 @@ export default function MentorAssignmentPage() {
           mentor: manualMentor,
           day: manualDay,
           manualApplied: true,
+          slotStart: undefined,
+          slotEnd: undefined,
+          sessionMinutes: undefined,
         };
         return {
           ...s,
