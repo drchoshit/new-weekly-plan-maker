@@ -160,6 +160,30 @@ const normalizeTimeRangePair = value => {
   if (en < st) en += 1440;
   return { st, en };
 };
+const normalizeAttendanceRanges = value => {
+  const parsed = ranges(value);
+  if (parsed.length > 0) {
+    const dedup = new Map();
+    parsed.forEach(r => {
+      const st = Number(r?.st);
+      const en = Number(r?.en);
+      if (Number.isNaN(st) || Number.isNaN(en)) return;
+      const key = `${st}-${en}`;
+      if (!dedup.has(key)) dedup.set(key, { st, en });
+    });
+    return Array.from(dedup.values()).sort((a, b) => a.st - b.st || a.en - b.en);
+  }
+
+  const single = normalizeTimeRangePair(value);
+  return single ? [single] : [];
+};
+const overlapWithAnyRange = (attRanges, slotStartMin, slotEndMin) =>
+  (attRanges || []).reduce(
+    (mx, r) => Math.max(mx, overlapRange(r.st, r.en, slotStartMin, slotEndMin)),
+    0
+  );
+const attendanceLabelFromRanges = attRanges =>
+  (attRanges || []).map(r => `${toClock(r.st)}~${toClock(r.en)}`).join(", ");
 const overlapRange = (aStart, aEnd, bStart, bEnd) =>
   Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
 const buildSlotsFromMentorTime = (mentorTime, durationMinutes) => {
@@ -529,10 +553,10 @@ export default function MentorAssignmentPage() {
         const mdKey = keyByMentorDay(c.mentor, c.day);
         const slots = mentorDaySlots[mdKey] || [];
         if (!slots.length) return;
-        const att = normalizeTimeRangePair(attByDay?.[c.day]);
-        if (!att) return;
+        const attRanges = normalizeAttendanceRanges(attByDay?.[c.day]);
+        if (!attRanges.length) return;
         slots.forEach((slot, idx) => {
-          const ov = overlapRange(att.st, att.en, slot.startMin, slot.endMin);
+          const ov = overlapWithAnyRange(attRanges, slot.startMin, slot.endMin);
           if (ov < minOverlapRequired) return;
           const sKey = keyBySlot(c.mentor, c.day, idx);
           const prevEntry = slotMap.get(sKey);
@@ -937,8 +961,8 @@ export default function MentorAssignmentPage() {
 
       let best = { day: "", ov: -1 };
       DAYS.forEach(day => {
-        const att = normalizeTimeRangePair(periodAttendance?.[student.id]?.[day]);
-        if (!att) return;
+        const attRanges = normalizeAttendanceRanges(periodAttendance?.[student.id]?.[day]);
+        if (!attRanges.length) return;
         const entries = (mentorsByDay?.[day] || []).filter(v => n(v?.name) === mentor);
         if (!entries.length) return;
         const ov = entries.reduce(
@@ -978,6 +1002,7 @@ export default function MentorAssignmentPage() {
           ...slot,
           studentId: null,
           studentName: "",
+          studentAttendanceLabel: "",
         }));
         const requestStudents = studentsByMentorDay[day]?.[mentor] || [];
 
@@ -985,11 +1010,13 @@ export default function MentorAssignmentPage() {
           .map(item => {
             const student = item?.student;
             if (!student) return null;
-            const att = normalizeTimeRangePair(periodAttendance?.[student.id]?.[day]);
-            if (!att) {
+            const attRanges = normalizeAttendanceRanges(periodAttendance?.[student.id]?.[day]);
+            const attLabel = attendanceLabelFromRanges(attRanges);
+            if (!attRanges.length) {
               return {
                 studentId: student.id,
                 studentName: student.name,
+                studentAttendanceLabel: "",
                 attStart: 9999,
                 eligible: [],
                 fixedIdx: -1,
@@ -998,7 +1025,7 @@ export default function MentorAssignmentPage() {
 
             const eligible = [];
             slots.forEach((slot, idx) => {
-              const ov = overlapRange(att.st, att.en, slot.startMin, slot.endMin);
+              const ov = overlapWithAnyRange(attRanges, slot.startMin, slot.endMin);
               if (ov >= minOverlapRequired) eligible.push(idx);
             });
 
@@ -1015,7 +1042,8 @@ export default function MentorAssignmentPage() {
             return {
               studentId: student.id,
               studentName: student.name,
-              attStart: att.st,
+              studentAttendanceLabel: attLabel,
+              attStart: Math.min(...attRanges.map(v => v.st)),
               eligible,
               fixedIdx,
             };
@@ -1045,6 +1073,7 @@ export default function MentorAssignmentPage() {
             used.add(req.fixedIdx);
             slots[req.fixedIdx].studentId = req.studentId;
             slots[req.fixedIdx].studentName = req.studentName;
+            slots[req.fixedIdx].studentAttendanceLabel = req.studentAttendanceLabel || "";
           } else {
             flexibleRequests.push({ ...req, fixedIdx: -1 });
           }
@@ -1068,6 +1097,7 @@ export default function MentorAssignmentPage() {
             used.add(picked);
             slots[picked].studentId = req.studentId;
             slots[picked].studentName = req.studentName;
+            slots[picked].studentAttendanceLabel = req.studentAttendanceLabel || "";
           } else {
             unassigned.push(req.studentName);
           }
@@ -1098,6 +1128,7 @@ export default function MentorAssignmentPage() {
           start: slot.start,
           end: slot.end,
           studentName: slot.studentName,
+          studentAttendanceLabel: slot.studentAttendanceLabel || "",
         });
       });
     });
@@ -1554,7 +1585,14 @@ export default function MentorAssignmentPage() {
                     <tr key={`today-${row.mentor}-${row.start}-${row.studentName}-${idx}`}>
                       <td className="border px-2 py-1">{row.start}~{row.end}</td>
                       <td className="border px-2 py-1">{row.mentor}</td>
-                      <td className="border px-2 py-1">{row.studentName}</td>
+                      <td className="border px-2 py-1">
+                        {row.studentName}
+                        {row.studentAttendanceLabel ? (
+                          <span className="ml-1 text-xs text-gray-500">
+                            ({row.studentAttendanceLabel})
+                          </span>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1593,7 +1631,14 @@ export default function MentorAssignmentPage() {
                             <span className="inline-block min-w-[96px] text-gray-600">
                               {slot.start}~{slot.end}
                             </span>
-                            <span>{slot.studentName || "빈 슬롯"}</span>
+                            <span>
+                              {slot.studentName || "빈 슬롯"}
+                              {slot.studentName && slot.studentAttendanceLabel ? (
+                                <span className="ml-1 text-xs text-gray-500">
+                                  ({slot.studentAttendanceLabel})
+                                </span>
+                              ) : null}
+                            </span>
                           </li>
                         ))}
                       </ul>
