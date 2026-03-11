@@ -4,9 +4,12 @@ import { getAppState, saveAppState, saveWeeklyCalendars } from "../api/client";
 
 export const ScheduleContext = createContext();
 
-// ✅ 요일 상수 (월~토)
 const days = ["월", "화", "수", "목", "금", "토"];
-const defaultDaySchedule = { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+const createEmptyDayArrayMap = () =>
+  days.reduce((acc, day) => ({ ...acc, [day]: [] }), {});
+const createEmptyDayObjectMap = () =>
+  days.reduce((acc, day) => ({ ...acc, [day]: {} }), {});
+const defaultDaySchedule = createEmptyDayArrayMap();
 
 const createDefaultPlannerCheckTime = () =>
   days.reduce(
@@ -20,6 +23,89 @@ const createDefaultPlannerCheckTime = () =>
     {}
   );
 
+const isSameValue = (left, right) => {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (typeof left !== typeof right) {
+    return false;
+  }
+
+  if (left == null || right == null) {
+    return false;
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!isSameValue(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (
+    typeof left === "object" &&
+    typeof right === "object" &&
+    !Array.isArray(left) &&
+    !Array.isArray(right)
+  ) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+
+    for (const key of leftKeys) {
+      if (!Object.prototype.hasOwnProperty.call(right, key)) {
+        return false;
+      }
+      if (!isSameValue(left[key], right[key])) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
+};
+
+const getUnionKeys = (...states) => {
+  const keys = new Set();
+
+  states.forEach(state => {
+    if (!state || typeof state !== "object") {
+      return;
+    }
+    Object.keys(state).forEach(key => keys.add(key));
+  });
+
+  return [...keys];
+};
+
+const createRebasedState = ({ serverState, localState, baselineState }) => {
+  const nextState = { ...(serverState ?? {}) };
+  const dirtyKeys = [];
+
+  for (const key of getUnionKeys(serverState, localState, baselineState)) {
+    const localValue = localState?.[key];
+    const baselineValue = baselineState?.[key];
+
+    if (!isSameValue(localValue, baselineValue)) {
+      nextState[key] = localValue;
+      dirtyKeys.push(key);
+    }
+  }
+
+  return { nextState, dirtyKeys };
+};
+
 export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const hasHydratedRef = useRef(false);
   const saveTimeoutRef = useRef();
@@ -28,6 +114,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   const isSavingRef = useRef(false);
   const lastConflictAlertAtRef = useRef(0);
   const serverVersionRef = useRef();
+  const lastSyncedStateRef = useRef(null);
   const [hasHydrated, setHasHydrated] = useState(false);
   const [serverVersion, setServerVersion] = useState();
   const [students, setStudents] = useState(() => {
@@ -40,17 +127,17 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   });
 
   // ================================
-  // 🔥 STEP 1: students 구조 자동 확장 (Migration)
+  // ?뵦 STEP 1: students 援ъ“ ?먮룞 ?뺤옣 (Migration)
   // ================================
   useEffect(() => {
     setStudents(prev =>
       prev.map(s => ({
         ...s,
 
-        // ✅ 신입생 플래그 통합 (이 줄 추가)
+        // ???좎엯???뚮옒洹??듯빀 (??以?異붽?)
        isNewStudent: s.isNewStudent ?? s.isNewbie ?? false,
         
-        // 🔹 과목 선택 (없으면 기본값)
+        // ?뵻 怨쇰ぉ ?좏깮 (?놁쑝硫?湲곕낯媛?
         subjects: s.subjects ?? {
           kor: false,
           math: false,
@@ -58,11 +145,11 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
           sci2: false,
         },
 
-        // 🔹 성격 / 출생년도
+        // ?뵻 ?깃꺽 / 異쒖깮?꾨룄
         personality: s.personality ?? "",
         birthYear: s.birthYear ?? "",
 
-        // 🔒 최초 배정 멘토 (신입생 첫 확정값 박제)
+        // ?뵏 理쒖큹 諛곗젙 硫섑넗 (?좎엯??泥??뺤젙媛?諛뺤젣)
         initialMentor: s.initialMentor
           ? {
               mentor: s.initialMentor.mentor || s.initialMentor.mentorId || "",
@@ -78,26 +165,26 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
             },
 
 
-        // 🔄 주차별 멘토 히스토리 (공식)
+        // ?봽 二쇱감蹂?硫섑넗 ?덉뒪?좊━ (怨듭떇)
         // mentorHistory[periodId] = {
-        //   mentorId: "hong-B", // 🔥 mentorId 기준
-        //   day: "수",
+        //   mentorId: "hong-B", // ?뵦 mentorId 湲곗?
+        //   day: "??,
         //   source: "newbie" | "auto",
         //   autoRank: 1,
-        //   fromDay: "수",
-        //   toDay: "화",
+        //   fromDay: "??,
+        //   toDay: "??,
         //   dayDiff: -1,
-        //   attended: true,        // 실제 진행 여부
-        //   missedCarryOver: false // 이월 누락 여부
+        //   attended: true,        // ?ㅼ젣 吏꾪뻾 ?щ?
+        //   missedCarryOver: false // ?댁썡 ?꾨씫 ?щ?
         // }
         mentorHistory: s.mentorHistory ?? {},
 
-        // 🧠 자동 배정 임시 결과 (재학생 페이지에서만 사용, 확정 시 삭제)
+        // ?쭬 ?먮룞 諛곗젙 ?꾩떆 寃곌낵 (?ы븰???섏씠吏?먯꽌留??ъ슜, ?뺤젙 ????젣)
         weeklyMentorDraft: s.weeklyMentorDraft ?? undefined,
         weeklyMentorInfo: s.weeklyMentorInfo ?? undefined,
       }))
     );
-    // ⚠️ 최초 1회만 실행
+    // ?좑툘 理쒖큹 1?뚮쭔 ?ㅽ뻾
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -106,9 +193,9 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       const saved = localStorage.getItem("mentorsByDay");
       return saved
         ? JSON.parse(saved)
-        : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+        : createEmptyDayArrayMap();
     } catch {
-      return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+      return createEmptyDayArrayMap();
     }
   });
   const [clinicMentorsByDay, setClinicMentorsByDay] = useState(() => {
@@ -116,13 +203,13 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       const saved = localStorage.getItem("clinicMentorsByDay");
       return saved
         ? JSON.parse(saved)
-        : { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+        : createEmptyDayArrayMap();
     } catch {
-      return { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] };
+      return createEmptyDayArrayMap();
     }
   });
 
-  // 🔥 [신규] 플래너 체크 결과 (읽기 전용 공유용)
+  // ?뵦 [?좉퇋] ?뚮옒??泥댄겕 寃곌낵 (?쎄린 ?꾩슜 怨듭쑀??
   const [plannerScheduleByDay, setPlannerScheduleByDay] = useState(() => {
     try {
       const saved =
@@ -169,7 +256,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   );
 
   const defaultMentalCare = {
-    mentorTime: { 월: {}, 화: {}, 수: {}, 목: {}, 금: {}, 토: {} },
+    mentorTime: createEmptyDayObjectMap(),
     sessionDuration: 15,
   };
   const [mentalCareSettings, setMentalCareSettings] = useState(() => {
@@ -246,7 +333,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     }
   });
 
-  // ✅ 주간 범위
+  // ??二쇨컙 踰붿쐞
   const [startDate, setStartDate] = useState(
     () => localStorage.getItem("startDate") || ""
   );
@@ -254,7 +341,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     () => localStorage.getItem("endDate") || ""
   );
 
-  // 🔥 [신규] 공식 주차 목록
+  // ?뵦 [?좉퇋] 怨듭떇 二쇱감 紐⑸줉
   const [periods, setPeriods] = useState(() => {
     try {
       const saved = localStorage.getItem("periods");
@@ -264,17 +351,17 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     }
   });
 
-  // 🔥 [신규] 현재 선택된 주차
+  // ?뵦 [?좉퇋] ?꾩옱 ?좏깮??二쇱감
   const [selectedPeriod, setSelectedPeriod] = useState(() => {
     return localStorage.getItem("selectedPeriod") || "";
   });
   
-  // 🔥 [신규] 자동배정 기준 주차 (확정된 주)
+  // ?뵦 [?좉퇋] ?먮룞諛곗젙 湲곗? 二쇱감 (?뺤젙??二?
   const [currentPeriodId, setCurrentPeriodId] = useState(() => {
     return localStorage.getItem("currentPeriodId") || "";
   });
 
-  // 🔥 selectedPeriod → currentPeriodId 동기화 (핵심)
+  // ?뵦 selectedPeriod ??currentPeriodId ?숆린??(?듭떖)
   useEffect(() => {
     if (selectedPeriod && selectedPeriod !== currentPeriodId) {
       setCurrentPeriodId(selectedPeriod);
@@ -282,7 +369,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   }, [selectedPeriod]);
 
   /* =================================================
-     🔥 학생별 주간 캘린더 (외부 업로드용)
+     ?뵦 ?숈깮蹂?二쇨컙 罹섎┛??(?몃? ?낅줈?쒖슜)
   ================================================= */
   const [weeklyCalendars, setWeeklyCalendars] = useState(() => {
     try {
@@ -294,7 +381,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   });
 
   /* =================================================
-     🔥 원장 컨설팅 데이터
+     ?뵦 ?먯옣 而⑥꽕???곗씠??
   ================================================= */
   const [studentConsultings, setStudentConsultings] = useState(() => {
     try {
@@ -305,8 +392,8 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     }
   });
 
-  // ===== 학생 추가 시 출결 기본값 (주차 기준) =====
-  // 🔥 출결은 "자동배정 기준 주차" 기준으로 생성
+  // ===== ?숈깮 異붽? ??異쒓껐 湲곕낯媛?(二쇱감 湲곗?) =====
+  // ?뵦 異쒓껐? "?먮룞諛곗젙 湲곗? 二쇱감" 湲곗??쇰줈 ?앹꽦
   useEffect(() => {
     if (!currentPeriodId) return;
 
@@ -319,14 +406,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
       students.forEach(s => {
         if (!next[currentPeriodId][s.id]) {
-          next[currentPeriodId][s.id] = {
-            월: [],
-            화: [],
-            수: [],
-            목: [],
-            금: [],
-            토: [],
-          };
+          next[currentPeriodId][s.id] = createEmptyDayArrayMap();
         }
       });
 
@@ -334,7 +414,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     });
   }, [students, currentPeriodId]);
 
-  // ===== 출결 정규화 =====
+  // ===== 異쒓껐 ?뺢퇋??=====
   function normalizeTimeValue(value) {
     if (Array.isArray(value)) {
       const a = value.map((v) => (typeof v === "string" ? v.trim() : ""));
@@ -411,7 +491,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     });
   }, [students, currentPeriodId]);
 
-  // ===== localStorage 동기화 =====
+  // ===== localStorage ?숆린??=====
   useEffect(() => {
     localStorage.setItem("students", JSON.stringify(students));
   }, [students]);
@@ -530,7 +610,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     );
   }, [studentConsultings]);
 
-  // ===== 전체 백업 =====
+  // ===== ?꾩껜 諛깆뾽 =====
   const getAllState = () => ({
     students,
     mentorsByDay,
@@ -541,7 +621,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     mentalCareSettings,
     scheduleByDay,
 
-    // 🔥 플래너 체크 결과
+    // ?뵦 ?뚮옒??泥댄겕 寃곌낵
     plannerScheduleByDay,
     plannerCheckTime,
     plannerSessionDuration,
@@ -570,25 +650,21 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
     if ("students" in data) setStudents(data.students ?? []);
     if ("mentorsByDay" in data)
-      setMentorsByDay(
-        data.mentorsByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
-      );
+      setMentorsByDay(data.mentorsByDay ?? createEmptyDayArrayMap());
     if ("clinicMentorsByDay" in data)
-      setClinicMentorsByDay(
-        data.clinicMentorsByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] }
-      );
+      setClinicMentorsByDay(data.clinicMentorsByDay ?? createEmptyDayArrayMap());
     if ("plannerMessage" in data) setPlannerMessage(data.plannerMessage ?? "");
     if ("noticeMessage" in data) setNoticeMessage(data.noticeMessage ?? "");
     if ("monthlyNotice" in data) setMonthlyNotice(data.monthlyNotice ?? "");
     if ("mentalCareSettings" in data)
       setMentalCareSettings(
         data.mentalCareSettings ?? {
-          mentorTime: { 월: {}, 화: {}, 수: {}, 목: {}, 금: {}, 토: {} },
+          mentorTime: createEmptyDayObjectMap(),
           sessionDuration: 15,
         }
       );
     if ("scheduleByDay" in data)
-      setScheduleByDay(data.scheduleByDay ?? { 월: [], 화: [], 수: [], 목: [], 금: [], 토: [] });
+      setScheduleByDay(data.scheduleByDay ?? createEmptyDayArrayMap());
     if ("plannerScheduleByDay" in data)
       setPlannerScheduleByDay(
         data.plannerScheduleByDay ?? defaultDaySchedule
@@ -619,8 +695,10 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
   const applyServerSnapshot = snapshot => {
     if (!snapshot) return;
+    const nextState = snapshot.state ?? {};
+    lastSyncedStateRef.current = nextState;
     skipNextFullSaveRef.current = true;
-    setAllState(snapshot.state ?? {});
+    setAllState(nextState);
 
     if (Number.isInteger(snapshot.version)) {
       serverVersionRef.current = snapshot.version;
@@ -635,20 +713,74 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     }
     lastConflictAlertAtRef.current = now;
     window.alert(
-      "다른 컴퓨터에서 먼저 수정된 내용이 있어 최신 서버 데이터로 갱신했습니다. 방금 수정한 내용은 다시 확인 후 저장해 주세요."
+      "다른 컴퓨터에서 먼저 수정된 내용이 있어 최신 데이터로 동기화했습니다. 방금 수정한 내용을 다시 확인해 주세요."
     );
   };
 
-  const handleVersionConflict = error => {
+  const handleVersionConflict = async (
+    error,
+    localStateForRetry = getAllState()
+  ) => {
     if (error?.status !== 409) {
       return false;
     }
-    applyServerSnapshot({
-      state: error?.body?.state ?? {},
-      version: error?.body?.version,
+
+    const serverState = error?.body?.state ?? {};
+    const serverVersion = error?.body?.version;
+    const baselineState = lastSyncedStateRef.current ?? {};
+    const { nextState: rebasedState, dirtyKeys } = createRebasedState({
+      serverState,
+      localState: localStateForRetry ?? {},
+      baselineState,
     });
-    pendingLocalSaveRef.current = false;
-    notifyConflict();
+
+    if (!dirtyKeys.length) {
+      applyServerSnapshot({
+        state: serverState,
+        version: serverVersion,
+      });
+      pendingLocalSaveRef.current = false;
+      return true;
+    }
+
+    if (!Number.isInteger(serverVersion)) {
+      applyServerSnapshot({
+        state: serverState,
+        version: serverVersion,
+      });
+      pendingLocalSaveRef.current = false;
+      notifyConflict();
+      return true;
+    }
+
+    try {
+      const retryResponse = await saveAppState(authToken, rebasedState, {
+        baseVersion: serverVersion,
+      });
+
+      skipNextFullSaveRef.current = true;
+      setAllState(rebasedState);
+      lastSyncedStateRef.current = rebasedState;
+
+      if (Number.isInteger(retryResponse?.version)) {
+        serverVersionRef.current = retryResponse.version;
+        setServerVersion(retryResponse.version);
+      }
+    } catch (retryError) {
+      if (retryError?.status === 401 && onUnauthorized) {
+        onUnauthorized();
+        return true;
+      }
+
+      applyServerSnapshot({
+        state: retryError?.body?.state ?? serverState,
+        version: retryError?.body?.version ?? serverVersion,
+      });
+      notifyConflict();
+    } finally {
+      pendingLocalSaveRef.current = false;
+    }
+
     return true;
   };
 
@@ -673,6 +805,10 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         nextWeeklyCalendars ?? {},
         { baseVersion: serverVersionRef.current }
       );
+      lastSyncedStateRef.current = {
+        ...(lastSyncedStateRef.current ?? {}),
+        weeklyCalendars: nextWeeklyCalendars ?? {},
+      };
       if (Number.isInteger(response?.version)) {
         serverVersionRef.current = response.version;
         setServerVersion(response.version);
@@ -680,7 +816,12 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     } catch (error) {
       if (error?.status === 401 && onUnauthorized) {
         onUnauthorized();
-      } else if (!handleVersionConflict(error)) {
+      } else if (
+        !(await handleVersionConflict(error, {
+          ...getAllState(),
+          weeklyCalendars: nextWeeklyCalendars ?? {},
+        }))
+      ) {
         console.error("Failed to save weekly calendars:", error);
       }
     } finally {
@@ -695,6 +836,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       setHasHydrated(false);
       serverVersionRef.current = undefined;
       setServerVersion(undefined);
+      lastSyncedStateRef.current = null;
       pendingLocalSaveRef.current = false;
       return;
     }
@@ -770,13 +912,26 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       }
     };
 
+    const handleForegroundSync = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      pollLatestState();
+    };
+
+    pollLatestState();
     const timer = setInterval(() => {
       pollLatestState();
     }, 5000);
 
+    window.addEventListener("focus", handleForegroundSync);
+    document.addEventListener("visibilitychange", handleForegroundSync);
+
     return () => {
       disposed = true;
       clearInterval(timer);
+      window.removeEventListener("focus", handleForegroundSync);
+      document.removeEventListener("visibilitychange", handleForegroundSync);
     };
   }, [authToken, onUnauthorized]);
 
@@ -797,28 +952,32 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     pendingLocalSaveRef.current = true;
     saveTimeoutRef.current = setTimeout(() => {
       isSavingRef.current = true;
-      saveAppState(authToken, getAllState(), {
-        baseVersion: serverVersionRef.current,
-      })
-        .then(response => {
+      const localStateForSave = getAllState();
+
+      (async () => {
+        try {
+          const response = await saveAppState(authToken, localStateForSave, {
+            baseVersion: serverVersionRef.current,
+          });
+          lastSyncedStateRef.current = localStateForSave;
+
           if (Number.isInteger(response?.version)) {
             serverVersionRef.current = response.version;
             setServerVersion(response.version);
           }
-        })
-        .catch(error => {
+        } catch (error) {
           if (error?.status === 401 && onUnauthorized) {
             onUnauthorized();
             return;
           }
-          if (!handleVersionConflict(error)) {
+          if (!(await handleVersionConflict(error, localStateForSave))) {
             console.error("Failed to save app state:", error);
           }
-        })
-        .finally(() => {
+        } finally {
           isSavingRef.current = false;
           pendingLocalSaveRef.current = false;
-        });
+        }
+      })();
     }, 800);
 
     return () => {
@@ -872,7 +1031,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         monthlyNotice, setMonthlyNotice,
         mentalCareSettings, setMentalCareSettings,
         scheduleByDay, setScheduleByDay,
-        // 🔥 플래너 체크 결과 공유용
+        // ?뵦 ?뚮옒??泥댄겕 寃곌낵 怨듭쑀??
         plannerScheduleByDay, setPlannerScheduleByDay,
         plannerCheckTime, setPlannerCheckTime,
         plannerSessionDuration, setPlannerSessionDuration,
@@ -889,10 +1048,10 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         periods, setPeriods,
         selectedPeriod, setSelectedPeriod,
 
-        // 🔥 자동배정 기준 주차
+        // ?뵦 ?먮룞諛곗젙 湲곗? 二쇱감
         currentPeriodId, setCurrentPeriodId,
 
-        // 🔥 캘린더 & 컨설팅
+        // ?뵦 罹섎┛??& 而⑥꽕??
         weeklyCalendars, setWeeklyCalendars,
         studentConsultings, setStudentConsultings,
 
@@ -907,3 +1066,4 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 };
 
 export const useSchedule = () => useContext(ScheduleContext);
+

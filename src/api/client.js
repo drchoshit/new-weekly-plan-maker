@@ -1,6 +1,58 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL_STORAGE_KEY = "apiBaseUrlOverride";
+const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
-const buildUrl = path => `${API_BASE_URL}${path}`;
+const normalizeBaseUrl = value => {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+};
+
+export const getApiBaseUrl = () => {
+  try {
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(API_BASE_URL_STORAGE_KEY)
+        : "";
+    if (stored) {
+      return normalizeBaseUrl(stored);
+    }
+  } catch {
+    // Ignore localStorage access issues and fall back to env var.
+  }
+
+  return normalizeBaseUrl(ENV_API_BASE_URL);
+};
+
+export const setApiBaseUrlOverride = value => {
+  const normalized = normalizeBaseUrl(value);
+
+  try {
+    if (typeof window === "undefined") {
+      return normalized;
+    }
+
+    if (normalized) {
+      window.localStorage.setItem(API_BASE_URL_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(API_BASE_URL_STORAGE_KEY);
+    }
+
+    window.dispatchEvent(new Event("api-base-url-updated"));
+  } catch {
+    // Ignore localStorage access issues.
+  }
+
+  return normalized;
+};
+
+const buildUrl = path => `${getApiBaseUrl()}${path}`;
 
 const handleResponse = async response => {
   if (!response.ok) {

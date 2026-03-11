@@ -1,7 +1,26 @@
-import React, { useState } from "react";
-import { login } from "../api/client";
+import React, { useMemo, useState } from "react";
+import {
+  getApiBaseUrl,
+  login,
+  setApiBaseUrlOverride,
+} from "../api/client";
+
+const isValidApiUrl = value => {
+  if (!value) {
+    return true;
+  }
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
 
 export default function LoginPage({ onLoginSuccess }) {
+  const initialApiUrl = useMemo(() => getApiBaseUrl(), []);
+  const [apiBaseUrlInput, setApiBaseUrlInput] = useState(initialApiUrl);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -10,6 +29,16 @@ export default function LoginPage({ onLoginSuccess }) {
   const handleSubmit = async event => {
     event.preventDefault();
     setErrorMessage("");
+
+    const nextApiUrl = apiBaseUrlInput.trim();
+    if (!isValidApiUrl(nextApiUrl)) {
+      setErrorMessage(
+        "API 서버 주소 형식이 올바르지 않습니다. 예: https://mentoring-api-xxxx.onrender.com"
+      );
+      return;
+    }
+
+    setApiBaseUrlOverride(nextApiUrl);
     setIsSubmitting(true);
 
     try {
@@ -17,13 +46,17 @@ export default function LoginPage({ onLoginSuccess }) {
       if (result?.token) {
         onLoginSuccess(result.token);
       } else {
-        setErrorMessage("로그인 토큰을 받을 수 없습니다. 관리자에게 문의하세요.");
+        setErrorMessage(
+          "로그인 토큰을 받을 수 없습니다. 관리자에게 문의해 주세요."
+        );
       }
     } catch (error) {
       if (error?.status === 401) {
         setErrorMessage("아이디 또는 비밀번호가 올바르지 않습니다.");
       } else {
-        setErrorMessage("로그인 중 오류가 발생했습니다.");
+        setErrorMessage(
+          "로그인 중 오류가 발생했습니다. API 서버 주소와 네트워크를 확인해 주세요."
+        );
       }
     } finally {
       setIsSubmitting(false);
@@ -35,10 +68,25 @@ export default function LoginPage({ onLoginSuccess }) {
       <div className="w-full max-w-md rounded-xl bg-white p-8 shadow-lg">
         <h1 className="text-2xl font-bold text-slate-900">관리자 로그인</h1>
         <p className="mt-2 text-sm text-slate-500">
-          공용 데이터를 사용하려면 로그인해 주세요.
+          여러 컴퓨터에서 같은 데이터를 보려면 동일한 API 서버 주소를 사용해야 합니다.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">
+              API 서버 주소
+            </span>
+            <input
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="예: https://mentoring-api-xxxx.onrender.com"
+              value={apiBaseUrlInput}
+              onChange={event => setApiBaseUrlInput(event.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              비워두면 `.env`의 `VITE_API_BASE_URL` 값을 사용합니다.
+            </p>
+          </label>
+
           <label className="block">
             <span className="text-sm font-medium text-slate-700">아이디</span>
             <input
@@ -50,7 +98,9 @@ export default function LoginPage({ onLoginSuccess }) {
           </label>
 
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">비밀번호</span>
+            <span className="text-sm font-medium text-slate-700">
+              비밀번호
+            </span>
             <input
               type="password"
               className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
