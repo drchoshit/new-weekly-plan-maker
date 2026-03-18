@@ -818,18 +818,21 @@ export default function WeeklySchedule({
               {/* 금주의 멘토 */}
               <div className="print-mentor-box border border-print-line rounded-sm p-2 bg-white">
                 <h3 className="font-semibold mb-1 text-center">금주의 멘토</h3>
-
-                <div className="text-sm text-center font-medium mb-1">
-                  {mentorDayLabel}
+                <div className="print-mentor-fields flex items-center gap-1">
+                  <input
+                    readOnly
+                    value={mentorDayLabel}
+                    className="border border-print-line min-w-0 flex-1 text-center text-sm font-medium bg-slate-50"
+                  />
+                  <span className="text-sm text-slate-500">|</span>
+                  <input
+                    value={ov.mentorOfWeek ?? mentorName}
+                    onChange={(e) =>
+                      updateMentorOverride(student.id, e.target.value)
+                    }
+                    className="border border-print-line min-w-0 flex-1 text-center font-semibold"
+                  />
                 </div>
-
-                <input
-                  value={ov.mentorOfWeek ?? mentorName}
-                  onChange={(e) =>
-                    updateMentorOverride(student.id, e.target.value)
-                  }
-                  className="border border-print-line w-full text-center font-semibold"
-                />
               </div>
 
               {/* 부원장 인터뷰 (금주의 멘토 아래) */}

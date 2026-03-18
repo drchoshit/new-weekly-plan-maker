@@ -1178,6 +1178,21 @@ export default function MentorAssignmentPage() {
       };
     });
 
+    const studentsForPortalImport = studentRows.map(row => {
+      const derivedDays = DAY_SET.has(row.day)
+        ? [row.day]
+        : row.mentor
+        ? workingDays(row.mentor, mentorsByDay)
+        : [];
+      return {
+        id: row.studentId,
+        name: row.studentName,
+        mentor: row.mentor || "",
+        lead_mentor: row.mentor || "",
+        scheduledDays: derivedDays,
+      };
+    });
+
     const mentorMap = {};
     studentRows.forEach(row => {
       if (row.mentoringOptOut || !row.mentor) return;
@@ -1263,7 +1278,8 @@ export default function MentorAssignmentPage() {
       },
       mentorMatches,
       mentoringTimelineByDay: timelineByDay,
-      students: studentRows,
+      students: studentsForPortalImport,
+      studentsDetail: studentRows,
     };
 
     const safePeriodId = String(selectedPeriod).replace(/[\\/:*?"<>|]/g, "-");
