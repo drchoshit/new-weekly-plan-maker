@@ -249,7 +249,6 @@ export default function MentorAssignmentPage() {
     periods,
     assignments,
     setAssignments,
-    plannerScheduleByDay,
   } = useSchedule();
 
   const [maxPerMentor, setMaxPerMentor] = useState(6);
@@ -1152,6 +1151,133 @@ export default function MentorAssignmentPage() {
     return rows;
   }, [todayDayLabel, mentoringTimelineByDay]);
 
+  const downloadMentorMatchingInfo = () => {
+    if (!selectedPeriod) {
+      window.alert("기준 주차를 먼저 선택해 주세요.");
+      return;
+    }
+
+    const studentRows = students.map(student => {
+      const rec = student?.mentorHistory?.[selectedPeriod] || {};
+      const mentor = activeMentor(student);
+      const day = n(rec.day) || n(student?.selectedMentorDay);
+      return {
+        studentId: student.id,
+        studentName: student.name,
+        mentoringOptOut: isMentoringOptOut(student),
+        mentor: mentor || "",
+        day: day || "",
+        slotStart: n(rec.slotStart),
+        slotEnd: n(rec.slotEnd),
+        attended: rec.attended !== false,
+        missedDay: n(rec.missedDay),
+        missedReason: n(rec.missedReason),
+        manualMentor: n(rec.manualMentor),
+        rescheduleDate: n(rec.rescheduleDate),
+        rescheduleDay: n(rec.rescheduleDay),
+      };
+    });
+
+    const mentorMap = {};
+    studentRows.forEach(row => {
+      if (row.mentoringOptOut || !row.mentor) return;
+      if (!mentorMap[row.mentor]) {
+        mentorMap[row.mentor] = {
+          mentor: row.mentor,
+          totalAssigned: 0,
+          byDay: DAYS.reduce((acc, day) => {
+            acc[day] = [];
+            return acc;
+          }, {}),
+          students: [],
+        };
+      }
+      const target = mentorMap[row.mentor];
+      target.totalAssigned += 1;
+      target.students.push({
+        studentId: row.studentId,
+        studentName: row.studentName,
+        day: row.day || "",
+        slotStart: row.slotStart || "",
+        slotEnd: row.slotEnd || "",
+        attended: row.attended,
+        missedDay: row.missedDay || "",
+      });
+      if (DAY_SET.has(row.day)) {
+        target.byDay[row.day].push({
+          studentId: row.studentId,
+          studentName: row.studentName,
+          slotStart: row.slotStart || "",
+          slotEnd: row.slotEnd || "",
+        });
+      }
+    });
+
+    const mentorMatches = Object.values(mentorMap)
+      .sort((a, b) => String(a.mentor || "").localeCompare(String(b.mentor || ""), "ko"))
+      .map(item => ({
+        ...item,
+        students: item.students.sort((a, b) =>
+          String(a.studentName || "").localeCompare(String(b.studentName || ""), "ko")
+        ),
+        byDay: DAYS.reduce((acc, day) => {
+          acc[day] = [...(item.byDay?.[day] || [])].sort((a, b) =>
+            String(a.studentName || "").localeCompare(String(b.studentName || ""), "ko")
+          );
+          return acc;
+        }, {}),
+      }));
+
+    const timelineByDay = DAYS.reduce((acc, day) => {
+      acc[day] = Object.entries(mentoringTimelineByDay?.[day] || {})
+        .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
+        .map(([mentor, info]) => ({
+          mentor,
+          assignedCount: Number(info?.assignedCount || 0),
+          requestCount: Number(info?.requestCount || 0),
+          slots: (info?.slots || []).map(slot => ({
+            start: n(slot?.start),
+            end: n(slot?.end),
+            studentId: slot?.studentId ?? null,
+            studentName: n(slot?.studentName),
+            studentAttendanceLabel: n(slot?.studentAttendanceLabel),
+          })),
+          unassigned: Array.isArray(info?.unassigned) ? info.unassigned : [],
+        }));
+      return acc;
+    }, {});
+
+    const payload = {
+      scope: "mentorMatchingInfo",
+      exportedAt: new Date().toISOString(),
+      periodId: selectedPeriod,
+      settings: {
+        maxStudentsPerMentor: Number(maxPerMentor),
+        sessionMinutes: Number(minOverlapRequired),
+      },
+      summary: {
+        totalStudents: students.length,
+        optOutStudents: studentRows.filter(row => row.mentoringOptOut).length,
+        assignedStudents: studentRows.filter(row => !row.mentoringOptOut && row.mentor).length,
+        unassignedStudents: studentRows.filter(row => !row.mentoringOptOut && !row.mentor).length,
+      },
+      mentorMatches,
+      mentoringTimelineByDay: timelineByDay,
+      students: studentRows,
+    };
+
+    const safePeriodId = String(selectedPeriod).replace(/[\\/:*?"<>|]/g, "-");
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `mentor_matching_info_${safePeriodId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const fixedMentorConflict = useMemo(() => {
     const map = {};
     students.forEach(student => {
@@ -1286,25 +1412,6 @@ export default function MentorAssignmentPage() {
         return { ...s, mentorHistory: h };
       })
     );
-  const togglePlannerMissed = (studentId, day) =>
-    setStudents(prev =>
-      prev.map(s => {
-        if (s.id !== studentId || !selectedPeriod) return s;
-        const h = { ...(s.plannerHistory || {}) };
-        const rec = { ...(h[selectedPeriod] || {}), day };
-        if (rec.attended === false && rec.missedDay === day) {
-          rec.attended = true;
-          rec.missedCarryOver = false;
-          rec.missedDay = undefined;
-        } else {
-          rec.attended = false;
-          rec.missedCarryOver = true;
-          rec.missedDay = day;
-        }
-        h[selectedPeriod] = rec;
-        return { ...s, plannerHistory: h };
-      })
-    );
 
   return (
     <div className="p-4 space-y-8">
@@ -1363,7 +1470,13 @@ export default function MentorAssignmentPage() {
           요일/시간 배정 최소 겹침: {minOverlapRequired}분
         </span>
         <button onClick={autoAssign} className="bg-blue-600 text-white px-4 py-2 rounded">
-          멘토 배정하기
+          멘토 배정하기(리셋)
+        </button>
+        <button
+          onClick={downloadMentorMatchingInfo}
+          className="bg-emerald-600 text-white px-4 py-2 rounded"
+        >
+          멘토 매칭 정보 저장하기
         </button>
       </div>
 
@@ -1687,44 +1800,22 @@ export default function MentorAssignmentPage() {
                         ? selectedMentoringDay === day
                         : workingDays(mentor, mentorsByDay).includes(day)
                     );
-                    const hasPlanner = (plannerScheduleByDay?.[day] || []).some(
-                      v => String(v?.studentId) === String(s.id)
-                    );
                     const mRec = s?.mentorHistory?.[selectedPeriod];
-                    const pRec = s?.plannerHistory?.[selectedPeriod];
                     const mMiss = mRec?.attended === false && mRec?.missedDay === day;
                     const mCarry = mRec?.missedCarryOver === true && mRec?.missedDay === day;
-                    const pMiss = pRec?.attended === false && pRec?.missedDay === day;
-                    const pCarry = pRec?.missedCarryOver === true && pRec?.missedDay === day;
 
                     return (
                       <td key={`${s.id}-${day}`} className="border px-2 py-2 align-top">
-                        <div className="flex flex-col gap-1">
-                          {hasMentoring ? (
-                            <button
-                              className={`rounded px-1 py-0.5 text-sm ${
-                                mCarry ? "bg-red-200" : mMiss ? "bg-orange-200" : "bg-blue-100 hover:bg-blue-200"
-                              }`}
-                              onClick={() => toggleMentorMissed(s.id, day)}
-                            >
-                              {mCarry ? "멘토링(이월)" : mMiss ? "멘토링(누락)" : "멘토링"}
-                            </button>
-                          ) : null}
-                          {hasPlanner ? (
-                            <button
-                              className={`rounded px-1 py-0.5 text-sm ${
-                                pCarry
-                                  ? "bg-red-200"
-                                  : pMiss
-                                  ? "bg-orange-200"
-                                  : "bg-yellow-100 hover:bg-yellow-200"
-                              }`}
-                              onClick={() => togglePlannerMissed(s.id, day)}
-                            >
-                              {pCarry ? "플래너(이월)" : pMiss ? "플래너(누락)" : "플래너"}
-                            </button>
-                          ) : null}
-                        </div>
+                        {hasMentoring ? (
+                          <button
+                            className={`rounded px-1 py-0.5 text-sm ${
+                              mCarry ? "bg-red-200" : mMiss ? "bg-orange-200" : "bg-blue-100 hover:bg-blue-200"
+                            }`}
+                            onClick={() => toggleMentorMissed(s.id, day)}
+                          >
+                            {mCarry ? "멘토링(이월)" : mMiss ? "멘토링(누락)" : "멘토링"}
+                          </button>
+                        ) : null}
                       </td>
                     );
                   })}

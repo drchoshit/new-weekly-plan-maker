@@ -798,7 +798,7 @@ export default function WeeklySchedule({
                       </td>
                     ))}
                   </tr>
-                  {["과목", "문제 번호", "배정 멘토", "예정 요일"].map((label) => (
+                  {["과목", "문제 번호", "배정 멘토"].map((label) => (
                     <tr key={label}>
                       <td className="border border-print-line px-1 py-1.5 font-semibold bg-slate-50 whitespace-nowrap">
                         {label}
