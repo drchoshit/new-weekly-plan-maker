@@ -257,12 +257,19 @@ export default function MentorAssignmentPage() {
     return Number.isFinite(saved) && saved >= 10 ? saved : 20;
   });
   const [popup, setPopup] = useState({ title: "", text: "" });
+  const [lastAutoAssignMissingIds, setLastAutoAssignMissingIds] = useState([]);
+  const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
   const closePopup = () => setPopup({ title: "", text: "" });
   const minOverlapRequired = Math.max(10, Number(sessionDuration) || 20);
 
   useEffect(() => {
     localStorage.setItem("mentorSessionDuration", String(minOverlapRequired));
   }, [minOverlapRequired]);
+
+  useEffect(() => {
+    setLastAutoAssignMissingIds([]);
+    setLastAutoAssignAt("");
+  }, [selectedPeriod]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
   const prevPeriodId = useMemo(() => {
@@ -779,6 +786,10 @@ export default function MentorAssignmentPage() {
       })
     );
 
+    const missingFromAutoAssign = assignableStudents.filter(s => !pick[s.id]?.chosen);
+    setLastAutoAssignMissingIds(missingFromAutoAssign.map(s => s.id));
+    setLastAutoAssignAt(new Date().toISOString());
+
     const done = Object.values(pick).filter(v => v?.chosen).length;
     const lines = Object.entries(loads)
       .sort((a, b) => b[1] - a[1])
@@ -1150,6 +1161,23 @@ export default function MentorAssignmentPage() {
     });
     return rows;
   }, [todayDayLabel, mentoringTimelineByDay]);
+
+  const mentoringOptOutStudents = useMemo(
+    () =>
+      students
+        .filter(s => isMentoringOptOut(s))
+        .map(s => ({ id: s.id, name: s.name }))
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
+    [students]
+  );
+
+  const autoAssignMissingStudents = useMemo(() => {
+    const idSet = new Set((lastAutoAssignMissingIds || []).map(v => String(v)));
+    return students
+      .filter(s => idSet.has(String(s.id)) && !isMentoringOptOut(s))
+      .map(s => ({ id: s.id, name: s.name }))
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
+  }, [students, lastAutoAssignMissingIds]);
 
   const downloadMentorMatchingInfo = () => {
     if (!selectedPeriod) {
@@ -1686,6 +1714,51 @@ export default function MentorAssignmentPage() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="border rounded p-3 bg-amber-50 shadow-sm">
+          <h2 className="text-lg font-semibold mb-2">총괄멘토링 미희망 학생</h2>
+          {mentoringOptOutStudents.length === 0 ? (
+            <div className="text-sm text-gray-500">없음</div>
+          ) : (
+            <div className="space-y-1">
+              <div className="text-sm text-gray-600">총 {mentoringOptOutStudents.length}명</div>
+              <div className="flex flex-wrap gap-2">
+                {mentoringOptOutStudents.map(student => (
+                  <span
+                    key={`optout-${student.id}`}
+                    className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-sm text-amber-900"
+                  >
+                    {student.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="border rounded p-3 bg-rose-50 shadow-sm">
+          <h2 className="text-lg font-semibold mb-2">이번 자동배정 누락 학생</h2>
+          {!lastAutoAssignAt ? (
+            <div className="text-sm text-gray-500">자동배정을 아직 실행하지 않았습니다.</div>
+          ) : autoAssignMissingStudents.length === 0 ? (
+            <div className="text-sm text-emerald-700">누락 없음</div>
+          ) : (
+            <div className="space-y-1">
+              <div className="text-sm text-gray-600">총 {autoAssignMissingStudents.length}명</div>
+              <div className="flex flex-wrap gap-2">
+                {autoAssignMissingStudents.map(student => (
+                  <span
+                    key={`missed-auto-${student.id}`}
+                    className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-sm text-rose-900"
+                  >
+                    {student.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div>
