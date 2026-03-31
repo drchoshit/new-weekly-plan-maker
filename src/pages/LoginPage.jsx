@@ -19,7 +19,18 @@ const isValidApiUrl = value => {
 };
 
 export default function LoginPage({ onLoginSuccess }) {
-  const initialApiUrl = useMemo(() => getApiBaseUrl(), []);
+  const lockedApiUrl = useMemo(() => {
+    try {
+      return (localStorage.getItem("sharedApiBaseUrl") || "").trim();
+    } catch {
+      return "";
+    }
+  }, []);
+  const isApiLocked = Boolean(lockedApiUrl);
+  const initialApiUrl = useMemo(
+    () => (lockedApiUrl ? lockedApiUrl : getApiBaseUrl()),
+    [lockedApiUrl]
+  );
   const [apiBaseUrlInput, setApiBaseUrlInput] = useState(initialApiUrl);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -30,7 +41,7 @@ export default function LoginPage({ onLoginSuccess }) {
     event.preventDefault();
     setErrorMessage("");
 
-    const nextApiUrl = apiBaseUrlInput.trim();
+    const nextApiUrl = (isApiLocked ? lockedApiUrl : apiBaseUrlInput).trim();
     if (!isValidApiUrl(nextApiUrl)) {
       setErrorMessage(
         "API 서버 주소 형식이 올바르지 않습니다. 예: https://mentoring-api-xxxx.onrender.com"
@@ -47,7 +58,7 @@ export default function LoginPage({ onLoginSuccess }) {
         onLoginSuccess(result.token);
       } else {
         setErrorMessage(
-          "로그인 토큰을 받을 수 없습니다. 관리자에게 문의해 주세요."
+          "로그인 토큰을 받지 못했습니다. 관리자에게 문의해 주세요."
         );
       }
     } catch (error) {
@@ -77,14 +88,21 @@ export default function LoginPage({ onLoginSuccess }) {
               API 서버 주소
             </span>
             <input
-              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100"
               placeholder="예: https://mentoring-api-xxxx.onrender.com"
               value={apiBaseUrlInput}
               onChange={event => setApiBaseUrlInput(event.target.value)}
+              disabled={isApiLocked}
             />
-            <p className="mt-1 text-xs text-slate-500">
-              비워두면 `.env`의 `VITE_API_BASE_URL` 값을 사용합니다.
-            </p>
+            {isApiLocked ? (
+              <p className="mt-1 text-xs text-amber-700">
+                공용 API 주소 잠금이 적용되어 수정할 수 없습니다: {lockedApiUrl}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-slate-500">
+                비워두면 `.env`의 `VITE_API_BASE_URL` 값을 사용합니다.
+              </p>
+            )}
           </label>
 
           <label className="block">

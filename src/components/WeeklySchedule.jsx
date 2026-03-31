@@ -342,21 +342,10 @@ export default function WeeklySchedule({
   // ===============================
   // 🔥 로컬 스케줄 캐시 (인쇄 전용)
   // ===============================
-  const planSchedule = React.useMemo(() => {
-    const hasByDayData = days.some(
-      (day) =>
-        Array.isArray(plannerScheduleByDay?.[day]) &&
-        plannerScheduleByDay[day].length > 0
-    );
-
-    if (hasByDayData) return plannerScheduleByDay;
-
-    try {
-      return JSON.parse(localStorage.getItem('plannerSchedule') || '{}');
-    } catch {
-      return {};
-    }
-  }, [plannerScheduleByDay]);
+  const planSchedule = React.useMemo(
+    () => plannerScheduleByDay || {},
+    [plannerScheduleByDay]
+  );
 
   const careSchedule = scheduleByDay || {};
 

@@ -239,6 +239,42 @@ const runMaxFlow = (capacity, adjacency, source, sink) => {
   }
 };
 
+const normalizeTimelineByDay = timelineByDay =>
+  DAYS.reduce((acc, day) => {
+    const dayMap = {};
+    Object.entries(timelineByDay?.[day] || {})
+      .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
+      .forEach(([mentor, info]) => {
+        const mentorName = n(mentor);
+        if (!mentorName) return;
+        dayMap[mentorName] = {
+          slots: (info?.slots || []).map(slot => ({
+            start: n(slot?.start),
+            end: n(slot?.end),
+            startMin: Number(slot?.startMin),
+            endMin: Number(slot?.endMin),
+            studentId: slot?.studentId ?? null,
+            studentName: n(slot?.studentName),
+            studentAttendanceLabel: n(slot?.studentAttendanceLabel),
+          })),
+          unassigned: Array.isArray(info?.unassigned)
+            ? info.unassigned.map(v => n(v)).filter(Boolean)
+            : [],
+          assignedCount: Number(info?.assignedCount || 0),
+          requestCount: Number(info?.requestCount || 0),
+        };
+      });
+    acc[day] = dayMap;
+    return acc;
+  }, {});
+
+const buildTimelineSignature = ({ timelineByDay, sessionMinutes, maxStudentsPerMentor }) =>
+  JSON.stringify({
+    sessionMinutes: Number(sessionMinutes || 0),
+    maxStudentsPerMentor: Number(maxStudentsPerMentor || 0),
+    timelineByDay: normalizeTimelineByDay(timelineByDay),
+  });
+
 export default function MentorAssignmentPage() {
   const {
     students,
@@ -249,26 +285,26 @@ export default function MentorAssignmentPage() {
     periods,
     assignments,
     setAssignments,
+    mentorSessionDuration,
+    setMentorSessionDuration,
+    mentorAssignmentSnapshots,
+    setMentorAssignmentSnapshots,
   } = useSchedule();
 
   const [maxPerMentor, setMaxPerMentor] = useState(6);
-  const [sessionDuration, setSessionDuration] = useState(() => {
-    const saved = Number(localStorage.getItem("mentorSessionDuration"));
-    return Number.isFinite(saved) && saved >= 10 ? saved : 20;
-  });
   const [popup, setPopup] = useState({ title: "", text: "" });
   const [lastAutoAssignMissingIds, setLastAutoAssignMissingIds] = useState([]);
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
+  const [timelineViewMode, setTimelineViewMode] = useState("saved");
   const closePopup = () => setPopup({ title: "", text: "" });
-  const minOverlapRequired = Math.max(10, Number(sessionDuration) || 20);
-
-  useEffect(() => {
-    localStorage.setItem("mentorSessionDuration", String(minOverlapRequired));
-  }, [minOverlapRequired]);
+  const minOverlapRequired = Math.max(10, Number(mentorSessionDuration) || 20);
+  const setSessionDuration = value =>
+    setMentorSessionDuration(Math.max(10, Number(value) || 20));
 
   useEffect(() => {
     setLastAutoAssignMissingIds([]);
     setLastAutoAssignAt("");
+    setTimelineViewMode("saved");
   }, [selectedPeriod]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
@@ -1125,11 +1161,83 @@ export default function MentorAssignmentPage() {
     return result;
   }, [students, mentorsByDay, periodAttendance, selectedPeriod, minOverlapRequired]);
 
+  const normalizedTimelineByDay = useMemo(
+    () => normalizeTimelineByDay(mentoringTimelineByDay),
+    [mentoringTimelineByDay]
+  );
+  const savedSnapshot = selectedPeriod
+    ? mentorAssignmentSnapshots?.[selectedPeriod] || null
+    : null;
+  const savedTimelineByDay = useMemo(
+    () => normalizeTimelineByDay(savedSnapshot?.timelineByDay || {}),
+    [savedSnapshot]
+  );
+  const hasSavedSnapshot = Boolean(savedSnapshot?.timelineByDay);
+  const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed";
+  const displayTimelineByDay = showingSavedSnapshot
+    ? savedTimelineByDay
+    : normalizedTimelineByDay;
+  const savedSnapshotSessionMinutes = Math.max(
+    10,
+    Number(savedSnapshot?.settings?.sessionMinutes || 0)
+  );
+  const snapshotIsDirty = useMemo(() => {
+    if (!selectedPeriod || !hasSavedSnapshot) {
+      return true;
+    }
+    const currentSignature = buildTimelineSignature({
+      timelineByDay: normalizedTimelineByDay,
+      sessionMinutes: minOverlapRequired,
+      maxStudentsPerMentor: maxPerMentor,
+    });
+    const savedSignature = buildTimelineSignature({
+      timelineByDay: savedTimelineByDay,
+      sessionMinutes: savedSnapshotSessionMinutes,
+      maxStudentsPerMentor: Number(savedSnapshot?.settings?.maxStudentsPerMentor || 0),
+    });
+    return currentSignature !== savedSignature;
+  }, [
+    selectedPeriod,
+    hasSavedSnapshot,
+    timelineViewMode,
+    normalizedTimelineByDay,
+    minOverlapRequired,
+    maxPerMentor,
+    savedTimelineByDay,
+    savedSnapshotSessionMinutes,
+    savedSnapshot,
+  ]);
+
+  const saveMentoringResultSnapshot = () => {
+    if (!selectedPeriod) {
+      window.alert("기준 주차를 먼저 선택해 주세요.");
+      return;
+    }
+    const savedAt = new Date().toISOString();
+    setMentorAssignmentSnapshots(prev => ({
+      ...(prev || {}),
+      [selectedPeriod]: {
+        periodId: selectedPeriod,
+        savedAt,
+        settings: {
+          sessionMinutes: Number(minOverlapRequired),
+          maxStudentsPerMentor: Number(maxPerMentor),
+        },
+        timelineByDay: normalizedTimelineByDay,
+      },
+    }));
+    setTimelineViewMode("saved");
+    setPopup({
+      title: "배정 결과 서버 저장 완료",
+      text: `기준 주차: ${selectedPeriod}\n세션 길이: ${minOverlapRequired}분\n저장 시각: ${savedAt}`,
+    });
+  };
+
   const todayDayLabel = DAY_LABEL_BY_JS[new Date().getDay()] || "";
   const todayMentoringRows = useMemo(() => {
     if (!DAY_SET.has(todayDayLabel)) return [];
     const rows = [];
-    const dayData = mentoringTimelineByDay?.[todayDayLabel] || {};
+    const dayData = displayTimelineByDay?.[todayDayLabel] || {};
     Object.entries(dayData).forEach(([mentor, info]) => {
       (info?.slots || []).forEach(slot => {
         if (!slot.studentName) return;
@@ -1148,19 +1256,19 @@ export default function MentorAssignmentPage() {
       return String(a.mentor || "").localeCompare(String(b.mentor || ""), "ko");
     });
     return rows;
-  }, [todayDayLabel, mentoringTimelineByDay]);
+  }, [todayDayLabel, displayTimelineByDay]);
 
   const todayUnassignedRows = useMemo(() => {
     if (!DAY_SET.has(todayDayLabel)) return [];
     const rows = [];
-    const dayData = mentoringTimelineByDay?.[todayDayLabel] || {};
+    const dayData = displayTimelineByDay?.[todayDayLabel] || {};
     Object.entries(dayData).forEach(([mentor, info]) => {
       (info?.unassigned || []).forEach(studentName => {
         rows.push({ mentor, studentName });
       });
     });
     return rows;
-  }, [todayDayLabel, mentoringTimelineByDay]);
+  }, [todayDayLabel, displayTimelineByDay]);
 
   const mentoringOptOutStudents = useMemo(
     () =>
@@ -1272,7 +1380,7 @@ export default function MentorAssignmentPage() {
       }));
 
     const timelineByDay = DAYS.reduce((acc, day) => {
-      acc[day] = Object.entries(mentoringTimelineByDay?.[day] || {})
+      acc[day] = Object.entries(displayTimelineByDay?.[day] || {})
         .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
         .map(([mentor, info]) => ({
           mentor,
@@ -1295,8 +1403,12 @@ export default function MentorAssignmentPage() {
       exportedAt: new Date().toISOString(),
       periodId: selectedPeriod,
       settings: {
-        maxStudentsPerMentor: Number(maxPerMentor),
-        sessionMinutes: Number(minOverlapRequired),
+        maxStudentsPerMentor: Number(
+          hasSavedSnapshot ? savedSnapshot?.settings?.maxStudentsPerMentor : maxPerMentor
+        ),
+        sessionMinutes: Number(
+          hasSavedSnapshot ? savedSnapshotSessionMinutes : minOverlapRequired
+        ),
       },
       summary: {
         totalStudents: students.length,
@@ -1485,6 +1597,40 @@ export default function MentorAssignmentPage() {
         </div>
       </div>
 
+      <div className="border rounded p-3 bg-slate-50 text-sm space-y-1">
+        <div className="font-semibold">배정 결과 동기화 상태</div>
+        {hasSavedSnapshot ? (
+          <>
+            <div className="text-slate-700">
+              저장된 기준: {n(savedSnapshot?.savedAt) || "-"} / 세션 {savedSnapshotSessionMinutes}분
+            </div>
+            <div className="text-slate-700">
+              현재 표시: {showingSavedSnapshot ? "저장본 기준" : "현재 계산 기준(미저장 포함)"}
+            </div>
+            <div className={snapshotIsDirty ? "text-amber-700" : "text-emerald-700"}>
+              {snapshotIsDirty
+                ? "현재 화면 변경사항이 저장본과 다릅니다. '배정 결과 서버 저장'을 눌러야 다른 PC에 동일 반영됩니다."
+                : "현재 화면이 서버 저장본과 동일합니다."}
+            </div>
+            <div>
+              <button
+                type="button"
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                onClick={() =>
+                  setTimelineViewMode(prev => (prev === "saved" ? "computed" : "saved"))
+                }
+              >
+                {showingSavedSnapshot ? "현재 계산 보기" : "저장본 보기"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="text-amber-700">
+            아직 저장된 배정 결과가 없습니다. 배정 후 '배정 결과 서버 저장'을 눌러 주세요.
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-sm font-medium">멘토 1명 당 최대 학생 수</label>
         <select
@@ -1515,6 +1661,12 @@ export default function MentorAssignmentPage() {
         </span>
         <button onClick={autoAssign} className="bg-blue-600 text-white px-4 py-2 rounded">
           멘토 배정하기(리셋)
+        </button>
+        <button
+          onClick={saveMentoringResultSnapshot}
+          className="bg-indigo-600 text-white px-4 py-2 rounded"
+        >
+          배정 결과 서버 저장
         </button>
         <button
           onClick={downloadMentorMatchingInfo}
@@ -1816,10 +1968,10 @@ export default function MentorAssignmentPage() {
           {DAYS.map(day => (
             <div key={day} className="border rounded p-3 bg-white shadow-sm">
               <h3 className="font-bold mb-2">{day}요일</h3>
-              {Object.keys(mentoringTimelineByDay[day] || {}).length === 0 ? (
+              {Object.keys(displayTimelineByDay[day] || {}).length === 0 ? (
                 <div className="text-sm text-gray-400">배정 없음</div>
               ) : (
-                Object.entries(mentoringTimelineByDay[day])
+                Object.entries(displayTimelineByDay[day])
                   .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
                   .map(([mentor, info]) => (
                   <div key={mentor} className="mb-2">

@@ -1,4 +1,4 @@
-import React, { useContext, useMemo, useState } from "react";
+import React, { useContext, useEffect, useMemo, useState } from "react";
 import MentorInfoEditor from "./MentorInfoEditor";
 import { ScheduleContext } from "../context/ScheduleContext";
 import { getApiBaseUrl, setApiBaseUrlOverride } from "../api/client";
@@ -26,12 +26,22 @@ export default function SettingsPage() {
     setNoticeMessage,
     monthlyNotice,
     setMonthlyNotice,
+    sharedApiBaseUrl,
+    setSharedApiBaseUrl,
   } = useContext(ScheduleContext);
 
   const initialApiUrl = useMemo(() => getApiBaseUrl(), []);
   const [apiBaseUrlInput, setApiBaseUrlInput] = useState(initialApiUrl);
   const [apiSaveMessage, setApiSaveMessage] = useState("");
   const [apiSaveError, setApiSaveError] = useState("");
+  const lockedApiUrl = (sharedApiBaseUrl || "").trim();
+
+  useEffect(() => {
+    if (!lockedApiUrl) {
+      return;
+    }
+    setApiBaseUrlInput(lockedApiUrl);
+  }, [lockedApiUrl]);
 
   const handleSaveApiUrl = () => {
     const nextValue = apiBaseUrlInput.trim();
@@ -47,11 +57,16 @@ export default function SettingsPage() {
 
     const saved = setApiBaseUrlOverride(nextValue);
     setApiBaseUrlInput(saved);
-    setApiSaveMessage(
-      saved
-        ? "저장되었습니다. 다른 PC도 같은 API 주소로 맞춰 주세요."
-        : "오버라이드가 제거되었습니다. .env의 기본 API 주소를 사용합니다."
-    );
+    setSharedApiBaseUrl(saved || "");
+    if (saved) {
+      setApiSaveMessage(
+        "저장되었습니다. 공용 API 주소가 동기화되어 다른 PC도 같은 주소를 사용합니다."
+      );
+    } else {
+      setApiSaveMessage(
+        "공용 API 주소 잠금이 해제되었습니다. .env 기본 API 주소를 사용합니다."
+      );
+    }
   };
 
   return (
@@ -59,8 +74,7 @@ export default function SettingsPage() {
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <h3 className="font-bold text-slate-800">공통 API 서버</h3>
         <p className="mt-1 text-sm text-slate-600">
-          여러 PC에서 최신 데이터가 동일하게 보이려면, 아래 주소를 같은 값으로
-          맞춰야 합니다.
+          여러 PC에서 같은 데이터를 보려면, 아래 주소를 공통으로 맞춰야 합니다.
         </p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <input
@@ -77,6 +91,15 @@ export default function SettingsPage() {
             API 주소 저장
           </button>
         </div>
+        {lockedApiUrl ? (
+          <p className="mt-2 text-xs text-slate-600">
+            현재 공용 API 주소 잠금: {lockedApiUrl}
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-amber-700">
+            공용 API 주소 잠금이 비어 있습니다. 최초 1회 저장해 두면 모든 PC가 같은 주소를 사용합니다.
+          </p>
+        )}
         {apiSaveError ? (
           <p className="mt-2 text-sm text-red-600">{apiSaveError}</p>
         ) : null}

@@ -1,6 +1,12 @@
 // src/context/ScheduleContext.jsx
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
-import { getAppState, saveAppState, saveWeeklyCalendars } from "../api/client";
+import {
+  getApiBaseUrl,
+  getAppState,
+  saveAppState,
+  saveWeeklyCalendars,
+  setApiBaseUrlOverride,
+} from "../api/client";
 
 export const ScheduleContext = createContext();
 
@@ -295,6 +301,21 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
       return [];
     }
   });
+  const [mentorSessionDuration, setMentorSessionDuration] = useState(() => {
+    const parsed = Number(localStorage.getItem("mentorSessionDuration"));
+    return Number.isFinite(parsed) && parsed >= 10 ? parsed : 20;
+  });
+  const [mentorAssignmentSnapshots, setMentorAssignmentSnapshots] = useState(() => {
+    try {
+      const saved = localStorage.getItem("mentorAssignmentSnapshots");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [sharedApiBaseUrl, setSharedApiBaseUrl] = useState(
+    () => localStorage.getItem("sharedApiBaseUrl") || ""
+  );
 
   const [studentInterviewAssignments, setStudentInterviewAssignments] = useState(() => {
     try {
@@ -557,6 +578,21 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   }, [assignments]);
 
   useEffect(() => {
+    localStorage.setItem("mentorSessionDuration", String(mentorSessionDuration));
+  }, [mentorSessionDuration]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "mentorAssignmentSnapshots",
+      JSON.stringify(mentorAssignmentSnapshots)
+    );
+  }, [mentorAssignmentSnapshots]);
+
+  useEffect(() => {
+    localStorage.setItem("sharedApiBaseUrl", sharedApiBaseUrl || "");
+  }, [sharedApiBaseUrl]);
+
+  useEffect(() => {
     localStorage.setItem(
       "studentInterviewAssignments",
       JSON.stringify(studentInterviewAssignments)
@@ -629,6 +665,8 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
 
     attendance,
     assignments,
+    mentorSessionDuration,
+    mentorAssignmentSnapshots,
     studentInterviewAssignments,
     interviewSettings,
     interviewSchedule,
@@ -641,6 +679,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     currentPeriodId,
     weeklyCalendars,
     studentConsultings,
+    sharedApiBaseUrl,
   });
 
   const setAllState = (data) => {
@@ -678,6 +717,13 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     if ("printOverrides" in data) setPrintOverrides(data.printOverrides ?? {});
     if ("attendance" in data) setAttendance(data.attendance ?? {});
     if ("assignments" in data) setAssignments(data.assignments ?? []);
+    if ("mentorSessionDuration" in data) {
+      const parsed = Number(data.mentorSessionDuration);
+      setMentorSessionDuration(Number.isFinite(parsed) && parsed >= 10 ? parsed : 20);
+    }
+    if ("mentorAssignmentSnapshots" in data) {
+      setMentorAssignmentSnapshots(data.mentorAssignmentSnapshots ?? {});
+    }
     if ("studentInterviewAssignments" in data)
       setStudentInterviewAssignments(data.studentInterviewAssignments ?? {});
     if ("interviewSettings" in data) setInterviewSettings(data.interviewSettings ?? {});
@@ -691,6 +737,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     if ("currentPeriodId" in data) setCurrentPeriodId(data.currentPeriodId ?? "");
     if ("weeklyCalendars" in data) setWeeklyCalendars(data.weeklyCalendars ?? {});
     if ("studentConsultings" in data) setStudentConsultings(data.studentConsultings ?? {});
+    if ("sharedApiBaseUrl" in data) setSharedApiBaseUrl(data.sharedApiBaseUrl ?? "");
   };
 
   const applyServerSnapshot = snapshot => {
@@ -868,6 +915,21 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
   }, [authToken, onUnauthorized]);
 
   useEffect(() => {
+    if (!authToken || !hasHydrated) {
+      return;
+    }
+    const shared = String(sharedApiBaseUrl || "").trim();
+    if (!shared) {
+      return;
+    }
+    const current = getApiBaseUrl();
+    if (current === shared) {
+      return;
+    }
+    setApiBaseUrlOverride(shared);
+  }, [authToken, hasHydrated, sharedApiBaseUrl]);
+
+  useEffect(() => {
     if (!authToken) {
       return;
     }
@@ -1005,6 +1067,8 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     printOverrides,
     attendance,
     assignments,
+    mentorSessionDuration,
+    mentorAssignmentSnapshots,
     studentInterviewAssignments,
     interviewSettings,
     interviewSchedule,
@@ -1017,6 +1081,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
     currentPeriodId,
     weeklyCalendars,
     studentConsultings,
+    sharedApiBaseUrl,
     onUnauthorized,
   ]);
 
@@ -1038,6 +1103,8 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         printOverrides, setPrintOverrides,
         attendance, setAttendance,
         assignments, setAssignments,
+        mentorSessionDuration, setMentorSessionDuration,
+        mentorAssignmentSnapshots, setMentorAssignmentSnapshots,
         studentInterviewAssignments, setStudentInterviewAssignments,
         interviewSettings, setInterviewSettings,
         interviewSchedule, setInterviewSchedule,
@@ -1054,6 +1121,7 @@ export const ScheduleProvider = ({ children, authToken, onUnauthorized }) => {
         // ?뵦 罹섎┛??& 而⑥꽕??
         weeklyCalendars, setWeeklyCalendars,
         studentConsultings, setStudentConsultings,
+        sharedApiBaseUrl, setSharedApiBaseUrl,
 
         serverVersion,
         getAllState, setAllState,
