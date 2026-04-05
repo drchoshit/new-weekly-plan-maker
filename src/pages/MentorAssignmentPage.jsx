@@ -718,7 +718,7 @@ export default function MentorAssignmentPage() {
         ranks: rankSource.slice(0, 5),
         chosen: fixedChosenEntry?.candidate || null,
         forcedFixedMentor: fixedMentor,
-        forcedFixedDay,
+        forcedFixedDay: fixedForcedDay,
       };
     });
 
