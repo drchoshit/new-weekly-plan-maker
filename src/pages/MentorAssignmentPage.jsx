@@ -588,6 +588,25 @@ export default function MentorAssignmentPage() {
       mentorDaySlots[key].sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
     });
 
+    const mentorRemainingCapacity = {};
+    Object.keys(mentorDaySlots).forEach(mdKey => {
+      const [mentor = ""] = String(mdKey).split("@@");
+      const name = n(mentor);
+      if (!name) return;
+      if (mentorRemainingCapacity[name] == null) {
+        mentorRemainingCapacity[name] = Number(maxPerMentor);
+      }
+    });
+    const hasRemainingCapacity = mentor =>
+      Number(mentorRemainingCapacity[n(mentor)] ?? Number(maxPerMentor)) > 0;
+    const consumeCapacity = mentor => {
+      const name = n(mentor);
+      if (!name) return;
+      const current = Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor));
+      mentorRemainingCapacity[name] = Math.max(0, current - 1);
+    };
+    const reservedSlotKeys = new Set();
+
     const buildEligibleSlotRefs = (student, candidates) => {
       const attByDay = periodAttendance?.[student.id] || {};
       const slotMap = new Map();
@@ -650,27 +669,72 @@ export default function MentorAssignmentPage() {
 
     const effectiveCandidatesByStudent = {};
     const studentEligibleSlotsById = {};
+    const fixedStudents = assignableStudents.filter(s => Boolean(n(s?.fixedMentor)));
+    const generalStudents = assignableStudents.filter(s => !n(s?.fixedMentor));
 
-    assignableStudents.forEach(s => {
-      const fixed = n(s?.fixedMentor);
+    const buildForcedFixedCandidate = (student, mentorName, day) => {
+      const prev = prevRecord(student);
+      const normalizedDay = n(day);
+      return {
+        mentor: mentorName,
+        day: normalizedDay,
+        ov: 0,
+        gap: prev?.day && normalizedDay ? nextWeekGap(prev.day, normalizedDay) : null,
+        pScore: 999,
+        gapRuleMet: false,
+        exp: false,
+        math: false,
+        forcedFixedNoOverlap: true,
+      };
+    };
+
+    fixedStudents.forEach(s => {
+      const fixedMentor = n(s?.fixedMentor);
       const base = byStudent[s.id] || [];
-      const withSlots = base.filter(c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0);
-      const fixedPool = fixed ? withSlots.filter(c => c.mentor === fixed) : [];
-      const preferred = fixedPool.length ? fixedPool : withSlots;
-      const fallback = fixedPool.length ? withSlots : [];
+      const withSlots = base.filter(
+        c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0
+      );
+      const fixedPool = withSlots.filter(c => c.mentor === fixedMentor);
+      const fixedEligibleSlots = buildEligibleSlotRefs(s, fixedPool).filter(
+        item => !reservedSlotKeys.has(item.key) && hasRemainingCapacity(item?.candidate?.mentor)
+      );
+      const fixedChosenEntry = fixedEligibleSlots[0] || null;
+      const fixedForcedDay = fixedChosenEntry?.candidate?.day || resolveFixedMentorDay(s) || "";
 
-      let eligibleSlots = buildEligibleSlotRefs(s, preferred);
-      let rankPool = preferred;
-      if (!eligibleSlots.length && fallback.length) {
-        eligibleSlots = buildEligibleSlotRefs(s, fallback);
-        rankPool = fallback;
+      let rankSource = fixedPool;
+      if (!rankSource.length) {
+        const forcedCandidate = buildForcedFixedCandidate(s, fixedMentor, fixedForcedDay);
+        const otherCandidates = withSlots.filter(c => c.mentor !== fixedMentor);
+        rankSource = [forcedCandidate, ...otherCandidates];
       }
 
-      effectiveCandidatesByStudent[s.id] = rankPool;
+      if (fixedChosenEntry) {
+        reservedSlotKeys.add(fixedChosenEntry.key);
+        consumeCapacity(fixedChosenEntry?.candidate?.mentor);
+        loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
+      }
+
+      pick[s.id] = {
+        ranks: rankSource.slice(0, 5),
+        chosen: fixedChosenEntry?.candidate || null,
+        forcedFixedMentor: fixedMentor,
+        forcedFixedDay,
+      };
+    });
+
+    generalStudents.forEach(s => {
+      const base = byStudent[s.id] || [];
+      const withSlots = base.filter(c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0);
+      const eligibleSlots = buildEligibleSlotRefs(s, withSlots).filter(
+        item => !reservedSlotKeys.has(item.key) && hasRemainingCapacity(item?.candidate?.mentor)
+      );
+      effectiveCandidatesByStudent[s.id] = withSlots;
       studentEligibleSlotsById[s.id] = eligibleSlots;
     });
 
-    const flowStudents = assignableStudents.filter(s => (studentEligibleSlotsById[s.id] || []).length > 0);
+    const flowStudents = generalStudents.filter(
+      s => (studentEligibleSlotsById[s.id] || []).length > 0
+    );
     const slotKeys = Array.from(
       new Set(flowStudents.flatMap(s => (studentEligibleSlotsById[s.id] || []).map(item => item.key)))
     );
@@ -710,7 +774,8 @@ export default function MentorAssignmentPage() {
     mentorNamesFromFlow.forEach((name, idx) => {
       const node = mentorStart + idx;
       mentorNodeByName.set(name, node);
-      addEdge(node, T, Number(maxPerMentor));
+      const remainingCap = Math.max(0, Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor)));
+      if (remainingCap > 0) addEdge(node, T, remainingCap);
     });
 
     slotKeys.forEach(key => {
@@ -746,7 +811,7 @@ export default function MentorAssignmentPage() {
       }
     });
 
-    assignableStudents.forEach(s => {
+    generalStudents.forEach(s => {
       const effective = effectiveCandidatesByStudent[s.id] || [];
       const base = byStudent[s.id] || [];
       const rankSource = effective.length ? effective : base;
@@ -764,6 +829,10 @@ export default function MentorAssignmentPage() {
       students.map(s => {
         if (isMentoringOptOut(s)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
+        const fixedReason = rank =>
+          `고정멘토 우선 배정(시간 미일치)\n선택 멘토: ${rank.mentor || "-"}\n선택 요일: ${
+            rank.day || "미지정"
+          }\n※ 자동배정 누락 학생 목록에 표시됩니다.`;
         return {
           studentId: s.id,
           first: r[0]?.mentor || "",
@@ -779,7 +848,11 @@ export default function MentorAssignmentPage() {
             fifth: r[4]?.day || "",
           },
           reasons: {
-            first: r[0] ? reasonText(s, r[0]) : "후보 없음",
+            first: r[0]
+              ? r[0]?.forcedFixedNoOverlap
+                ? fixedReason(r[0])
+                : reasonText(s, r[0])
+              : "후보 없음",
             second: r[1] ? reasonText(s, r[1]) : "후보 없음",
             third: r[2] ? reasonText(s, r[2]) : "후보 없음",
             fourth: r[3] ? reasonText(s, r[3]) : "후보 없음",
@@ -793,7 +866,41 @@ export default function MentorAssignmentPage() {
       prev.map(s => {
         if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
         const chosen = pick[s.id]?.chosen;
-        if (!chosen) return clearCurrentMentoring(s);
+        const forcedFixedMentor = n(pick[s.id]?.forcedFixedMentor);
+        const forcedFixedDay = n(pick[s.id]?.forcedFixedDay);
+        if (!chosen) {
+          if (!forcedFixedMentor) return clearCurrentMentoring(s);
+          const old = s?.mentorHistory?.[selectedPeriod] || {};
+          return {
+            ...s,
+            selectedMentor: forcedFixedMentor,
+            selectedMentorDay: forcedFixedDay,
+            initialMentor: s?.initialMentor?.mentor
+              ? s.initialMentor
+              : {
+                  mentor: forcedFixedMentor,
+                  day: forcedFixedDay,
+                  periodId: selectedPeriod,
+                  createdAt: Date.now(),
+                },
+            mentorHistory: {
+              ...(s.mentorHistory || {}),
+              [selectedPeriod]: {
+                ...old,
+                mentor: forcedFixedMentor,
+                day: forcedFixedDay,
+                slotStart: undefined,
+                slotEnd: undefined,
+                sessionMinutes: undefined,
+                attended: true,
+                missedCarryOver: false,
+                missedDay: undefined,
+                autoRank: 1,
+                fixedNoOverlap: true,
+              },
+            },
+          };
+        }
 
         const old = s?.mentorHistory?.[selectedPeriod] || {};
         return {
@@ -816,6 +923,7 @@ export default function MentorAssignmentPage() {
               missedCarryOver: false,
               missedDay: undefined,
               autoRank: 1,
+              fixedNoOverlap: false,
             },
           },
         };
@@ -826,7 +934,11 @@ export default function MentorAssignmentPage() {
     setLastAutoAssignMissingIds(missingFromAutoAssign.map(s => s.id));
     setLastAutoAssignAt(new Date().toISOString());
 
-    const done = Object.values(pick).filter(v => v?.chosen).length;
+    const slotAssignedCount = Object.values(pick).filter(v => v?.chosen).length;
+    const fixedForcedCount = Object.values(pick).filter(
+      v => !v?.chosen && Boolean(n(v?.forcedFixedMentor))
+    ).length;
+    const done = slotAssignedCount + fixedForcedCount;
     const lines = Object.entries(loads)
       .sort((a, b) => b[1] - a[1])
       .map(([m, c]) => `${m}: ${c}명`)
@@ -835,7 +947,7 @@ export default function MentorAssignmentPage() {
       title: "자동 배정 완료",
       text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
         students.length - assignableStudents.length
-      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n배정 방식: 슬롯 기반 최대 배정\n\n${
+      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n배정 방식: 고정멘토 우선 + 슬롯 기반 최대 배정\n(슬롯 배정 ${slotAssignedCount}명 / 고정멘토 강제배정 ${fixedForcedCount}명)\n\n${
         lines || "배정 없음"
       }`,
     });
