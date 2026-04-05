@@ -888,6 +888,7 @@ export default function MentorAssignmentPage() {
               [selectedPeriod]: {
                 ...old,
                 mentor: forcedFixedMentor,
+                actualMentor: forcedFixedMentor,
                 day: forcedFixedDay,
                 slotStart: undefined,
                 slotEnd: undefined,
@@ -910,15 +911,16 @@ export default function MentorAssignmentPage() {
           initialMentor: s?.initialMentor?.mentor
             ? s.initialMentor
             : { mentor: chosen.mentor, day: chosen.day, periodId: selectedPeriod, createdAt: Date.now() },
-          mentorHistory: {
-            ...(s.mentorHistory || {}),
-            [selectedPeriod]: {
-              ...old,
-              mentor: chosen.mentor,
-              day: chosen.day,
-              slotStart: chosen.slotStart,
-              slotEnd: chosen.slotEnd,
-              sessionMinutes: minOverlapRequired,
+            mentorHistory: {
+              ...(s.mentorHistory || {}),
+              [selectedPeriod]: {
+                ...old,
+                mentor: chosen.mentor,
+                actualMentor: chosen.mentor,
+                day: chosen.day,
+                slotStart: chosen.slotStart,
+                slotEnd: chosen.slotEnd,
+                sessionMinutes: minOverlapRequired,
               attended: true,
               missedCarryOver: false,
               missedDay: undefined,
