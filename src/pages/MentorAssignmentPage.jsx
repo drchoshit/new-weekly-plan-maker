@@ -935,6 +935,7 @@ export default function MentorAssignmentPage() {
     const missingFromAutoAssign = assignableStudents.filter(s => !pick[s.id]?.chosen);
     setLastAutoAssignMissingIds(missingFromAutoAssign.map(s => s.id));
     setLastAutoAssignAt(new Date().toISOString());
+    setTimelineViewMode("computed");
 
     const slotAssignedCount = Object.values(pick).filter(v => v?.chosen).length;
     const fixedForcedCount = Object.values(pick).filter(
