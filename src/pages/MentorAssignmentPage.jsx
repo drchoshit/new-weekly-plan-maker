@@ -5,6 +5,7 @@ import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
+const PRIORITY_BUTTON_DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0", "\uC77C"];
 const KOREAN = ["\uC5B8\uB9E4", "\uD654\uC791", "\uACF5\uD1B5"].map(v => ({ value: v, label: v }));
 const MATH = ["\uBBF8\uC801", "\uD655\uD1B5", "\uAE30\uD558", "\uACF5\uD1B5"].map(v => ({
   value: v,
@@ -556,8 +557,9 @@ export default function MentorAssignmentPage() {
     }
   };
 
-  const autoAssign = () => {
+  const autoAssign = (preferredDayRaw = "") => {
     if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
+    const preferredPriorityDay = n(preferredDayRaw);
     const assignableStudents = students.filter(s => !isMentoringOptOut(s));
     const byStudent = {};
     assignableStudents.forEach(s => {
@@ -649,6 +651,11 @@ export default function MentorAssignmentPage() {
         });
       });
       return Array.from(slotMap.values()).sort((a, b) => {
+        if (preferredPriorityDay) {
+          const aPreferred = n(a?.candidate?.day) === preferredPriorityDay ? 1 : 0;
+          const bPreferred = n(b?.candidate?.day) === preferredPriorityDay ? 1 : 0;
+          if (aPreferred !== bPreferred) return bPreferred - aPreferred;
+        }
         if ((a.candidate.pScore ?? 0) !== (b.candidate.pScore ?? 0)) {
           return (a.candidate.pScore ?? 0) - (b.candidate.pScore ?? 0);
         }
@@ -665,6 +672,13 @@ export default function MentorAssignmentPage() {
         }
         return (a.candidate.slotIndex ?? 0) - (b.candidate.slotIndex ?? 0);
       });
+    };
+    const prioritizeByPreferredDay = candidates => {
+      const list = Array.isArray(candidates) ? candidates : [];
+      if (!preferredPriorityDay) return list;
+      const preferred = list.filter(c => n(c?.day) === preferredPriorityDay);
+      const others = list.filter(c => n(c?.day) !== preferredPriorityDay);
+      return [...preferred, ...others];
     };
 
     const effectiveCandidatesByStudent = {};
@@ -691,7 +705,7 @@ export default function MentorAssignmentPage() {
     fixedStudents.forEach(s => {
       const fixedMentor = n(s?.fixedMentor);
       const base = byStudent[s.id] || [];
-      const withSlots = base.filter(
+      const withSlots = prioritizeByPreferredDay(base).filter(
         c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0
       );
       const fixedPool = withSlots.filter(c => c.mentor === fixedMentor);
@@ -724,7 +738,9 @@ export default function MentorAssignmentPage() {
 
     generalStudents.forEach(s => {
       const base = byStudent[s.id] || [];
-      const withSlots = base.filter(c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0);
+      const withSlots = prioritizeByPreferredDay(base).filter(
+        c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0
+      );
       const eligibleSlots = buildEligibleSlotRefs(s, withSlots).filter(
         item => !reservedSlotKeys.has(item.key) && hasRemainingCapacity(item?.candidate?.mentor)
       );
@@ -732,93 +748,135 @@ export default function MentorAssignmentPage() {
       studentEligibleSlotsById[s.id] = eligibleSlots;
     });
 
-    const flowStudents = generalStudents.filter(
-      s => (studentEligibleSlotsById[s.id] || []).length > 0
-    );
-    const slotKeys = Array.from(
-      new Set(flowStudents.flatMap(s => (studentEligibleSlotsById[s.id] || []).map(item => item.key)))
-    );
-    const mentorNamesFromFlow = Array.from(
-      new Set(slotKeys.map(key => String(key).split("@@")[0] || "").filter(Boolean))
-    );
+    const runSlotFlow = slotRefsByStudent => {
+      const flowStudents = generalStudents.filter(
+        s => (slotRefsByStudent[s.id] || []).length > 0
+      );
+      const slotKeys = Array.from(
+        new Set(flowStudents.flatMap(s => (slotRefsByStudent[s.id] || []).map(item => item.key)))
+      );
+      const mentorNamesFromFlow = Array.from(
+        new Set(slotKeys.map(key => String(key).split("@@")[0] || "").filter(Boolean))
+      );
+      if (!flowStudents.length || !slotKeys.length || !mentorNamesFromFlow.length) {
+        return new Map();
+      }
 
-    const S = 0;
-    const studentStart = 1;
-    const slotStart = studentStart + flowStudents.length;
-    const mentorStart = slotStart + slotKeys.length;
-    const T = mentorStart + mentorNamesFromFlow.length;
-    const N = T + 1;
+      const S = 0;
+      const studentStart = 1;
+      const slotStart = studentStart + flowStudents.length;
+      const mentorStart = slotStart + slotKeys.length;
+      const T = mentorStart + mentorNamesFromFlow.length;
+      const N = T + 1;
 
-    const cap = Array.from({ length: N }, () => Array(N).fill(0));
-    const adj = Array.from({ length: N }, () => []);
-    const studentNodeById = new Map();
-    const slotNodeByKey = new Map();
-    const mentorNodeByName = new Map();
+      const cap = Array.from({ length: N }, () => Array(N).fill(0));
+      const adj = Array.from({ length: N }, () => []);
+      const studentNodeById = new Map();
+      const slotNodeByKey = new Map();
+      const mentorNodeByName = new Map();
 
-    const addEdge = (u, v, c) => {
-      if (!adj[u].includes(v)) adj[u].push(v);
-      if (!adj[v].includes(u)) adj[v].push(u);
-      cap[u][v] += c;
+      const addEdge = (u, v, c) => {
+        if (!adj[u].includes(v)) adj[u].push(v);
+        if (!adj[v].includes(u)) adj[v].push(u);
+        cap[u][v] += c;
+      };
+
+      flowStudents.forEach((s, idx) => {
+        const node = studentStart + idx;
+        studentNodeById.set(s.id, node);
+        addEdge(S, node, 1);
+      });
+
+      slotKeys.forEach((key, idx) => {
+        slotNodeByKey.set(key, slotStart + idx);
+      });
+
+      mentorNamesFromFlow.forEach((name, idx) => {
+        const node = mentorStart + idx;
+        mentorNodeByName.set(name, node);
+        const remainingCap = Math.max(0, Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor)));
+        if (remainingCap > 0) addEdge(node, T, remainingCap);
+      });
+
+      slotKeys.forEach(key => {
+        const [mentor = ""] = String(key).split("@@");
+        const sNode = slotNodeByKey.get(key);
+        const mNode = mentorNodeByName.get(mentor);
+        if (sNode == null || mNode == null) return;
+        addEdge(sNode, mNode, 1);
+      });
+
+      flowStudents.forEach(s => {
+        const sNode = studentNodeById.get(s.id);
+        (slotRefsByStudent[s.id] || []).forEach(item => {
+          const slotNode = slotNodeByKey.get(item.key);
+          if (sNode == null || slotNode == null) return;
+          addEdge(sNode, slotNode, 1);
+        });
+      });
+
+      runMaxFlow(cap, adj, S, T);
+
+      const chosen = new Map();
+      flowStudents.forEach(s => {
+        const sNode = studentNodeById.get(s.id);
+        const options = slotRefsByStudent[s.id] || [];
+        for (const item of options) {
+          const slotNode = slotNodeByKey.get(item.key);
+          if (sNode == null || slotNode == null) continue;
+          if (cap[slotNode][sNode] > 0) {
+            chosen.set(s.id, item.candidate);
+            break;
+          }
+        }
+      });
+      return chosen;
     };
 
-    flowStudents.forEach((s, idx) => {
-      const node = studentStart + idx;
-      studentNodeById.set(s.id, node);
-      addEdge(S, node, 1);
-    });
-
-    slotKeys.forEach((key, idx) => {
-      slotNodeByKey.set(key, slotStart + idx);
-    });
-
-    mentorNamesFromFlow.forEach((name, idx) => {
-      const node = mentorStart + idx;
-      mentorNodeByName.set(name, node);
-      const remainingCap = Math.max(0, Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor)));
-      if (remainingCap > 0) addEdge(node, T, remainingCap);
-    });
-
-    slotKeys.forEach(key => {
-      const [mentor = ""] = String(key).split("@@");
-      const sNode = slotNodeByKey.get(key);
-      const mNode = mentorNodeByName.get(mentor);
-      if (sNode == null || mNode == null) return;
-      addEdge(sNode, mNode, 1);
-    });
-
-    flowStudents.forEach(s => {
-      const sNode = studentNodeById.get(s.id);
-      (studentEligibleSlotsById[s.id] || []).forEach(item => {
-        const slotNode = slotNodeByKey.get(item.key);
-        if (sNode == null || slotNode == null) return;
-        addEdge(sNode, slotNode, 1);
-      });
-    });
-
-    runMaxFlow(cap, adj, S, T);
-
     const chosenByStudent = new Map();
-    flowStudents.forEach(s => {
-      const sNode = studentNodeById.get(s.id);
-      const options = studentEligibleSlotsById[s.id] || [];
-      for (const item of options) {
-        const slotNode = slotNodeByKey.get(item.key);
-        if (sNode == null || slotNode == null) continue;
-        if (cap[slotNode][sNode] > 0) {
-          chosenByStudent.set(s.id, item.candidate);
-          break;
-        }
+    if (preferredPriorityDay) {
+      const preferredSlotRefsById = {};
+      generalStudents.forEach(s => {
+        preferredSlotRefsById[s.id] = (studentEligibleSlotsById[s.id] || []).filter(
+          item => n(item?.candidate?.day) === preferredPriorityDay
+        );
+      });
+      const preferredChosen = runSlotFlow(preferredSlotRefsById);
+      preferredChosen.forEach((candidate, studentId) => {
+        chosenByStudent.set(studentId, candidate);
+        const key = keyBySlot(candidate?.mentor, candidate?.day, candidate?.slotIndex);
+        if (key) reservedSlotKeys.add(key);
+        consumeCapacity(candidate?.mentor);
+        loads[candidate?.mentor] = (loads[candidate?.mentor] || 0) + 1;
+      });
+    }
+
+    const remainSlotRefsById = {};
+    generalStudents.forEach(s => {
+      if (chosenByStudent.has(s.id)) {
+        remainSlotRefsById[s.id] = [];
+        return;
       }
+      remainSlotRefsById[s.id] = (studentEligibleSlotsById[s.id] || []).filter(
+        item =>
+          !reservedSlotKeys.has(item.key) &&
+          hasRemainingCapacity(item?.candidate?.mentor)
+      );
+    });
+    const remainChosen = runSlotFlow(remainSlotRefsById);
+    remainChosen.forEach((candidate, studentId) => {
+      chosenByStudent.set(studentId, candidate);
+      const key = keyBySlot(candidate?.mentor, candidate?.day, candidate?.slotIndex);
+      if (key) reservedSlotKeys.add(key);
+      consumeCapacity(candidate?.mentor);
+      loads[candidate?.mentor] = (loads[candidate?.mentor] || 0) + 1;
     });
 
     generalStudents.forEach(s => {
       const effective = effectiveCandidatesByStudent[s.id] || [];
       const base = byStudent[s.id] || [];
-      const rankSource = effective.length ? effective : base;
+      const rankSource = prioritizeByPreferredDay(effective.length ? effective : base);
       const chosen = chosenByStudent.get(s.id) || null;
-      if (chosen) {
-        loads[chosen.mentor] = (loads[chosen.mentor] || 0) + 1;
-      }
       pick[s.id] = {
         ranks: rankSource.slice(0, 5),
         chosen,
@@ -950,7 +1008,9 @@ export default function MentorAssignmentPage() {
       title: "자동 배정 완료",
       text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
         students.length - assignableStudents.length
-      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n배정 방식: 고정멘토 우선 + 슬롯 기반 최대 배정\n(슬롯 배정 ${slotAssignedCount}명 / 고정멘토 강제배정 ${fixedForcedCount}명)\n\n${
+      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
+        preferredPriorityDay ? `${preferredPriorityDay}요일` : "없음"
+      }\n배정 방식: 고정멘토 우선 + 슬롯 기반 최대 배정\n(슬롯 배정 ${slotAssignedCount}명 / 고정멘토 강제배정 ${fixedForcedCount}명)\n\n${
         lines || "배정 없음"
       }`,
     });
@@ -1789,6 +1849,18 @@ export default function MentorAssignmentPage() {
         >
           멘토 매칭 정보 저장하기
         </button>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">요일 우선 배정</span>
+        {PRIORITY_BUTTON_DAYS.map(day => (
+          <button
+            key={`priority-auto-assign-${day}`}
+            onClick={() => autoAssign(day)}
+            className="rounded border border-sky-300 bg-sky-50 px-3 py-1 text-sm text-sky-800 hover:border-sky-400 hover:bg-sky-100"
+          >
+            {day}요일 우선 배정
+          </button>
+        ))}
       </div>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
