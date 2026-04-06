@@ -318,7 +318,7 @@ export default function MentorAssignmentPage() {
   const [popup, setPopup] = useState({ title: "", text: "" });
   const [lastAutoAssignMissingIds, setLastAutoAssignMissingIds] = useState([]);
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
-  const [timelineViewMode, setTimelineViewMode] = useState("saved");
+  const [timelineViewMode, setTimelineViewMode] = useState("computed");
   const closePopup = () => setPopup({ title: "", text: "" });
   const minOverlapRequired = Math.max(10, Number(mentorSessionDuration) || 20);
   const setSessionDuration = value =>
@@ -327,7 +327,7 @@ export default function MentorAssignmentPage() {
   useEffect(() => {
     setLastAutoAssignMissingIds([]);
     setLastAutoAssignAt("");
-    setTimelineViewMode("saved");
+    setTimelineViewMode("computed");
   }, [selectedPeriod]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
@@ -564,7 +564,11 @@ export default function MentorAssignmentPage() {
               day: pickedDay,
               slotStart: undefined,
               slotEnd: undefined,
-              sessionMinutes: undefined,
+              sessionMinutes:
+                Number.isFinite(Number(old?.sessionMinutes)) &&
+                Number(old?.sessionMinutes) >= 10
+                  ? Number(old.sessionMinutes)
+                  : minOverlapRequired,
               attended: true,
               missedCarryOver: false,
               missedDay: undefined,
@@ -1014,7 +1018,7 @@ export default function MentorAssignmentPage() {
                 day: forcedFixedDay,
                 slotStart: undefined,
                 slotEnd: undefined,
-                sessionMinutes: undefined,
+                sessionMinutes: minOverlapRequired,
                 attended: true,
                 missedCarryOver: false,
                 missedDay: undefined,
@@ -1231,23 +1235,7 @@ export default function MentorAssignmentPage() {
   const mentoringTimelineByDay = useMemo(() => {
     const result = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
     const mentorSlotsByDay = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
-
-    DAYS.forEach(day => {
-      (mentorsByDay?.[day] || []).forEach(entry => {
-        const mentor = n(entry?.name);
-        if (!mentor) return;
-        if (!mentorSlotsByDay[day][mentor]) mentorSlotsByDay[day][mentor] = [];
-        mentorSlotsByDay[day][mentor].push(
-          ...buildSlotsFromMentorTime(mTime(entry), minOverlapRequired)
-        );
-      });
-
-      Object.keys(mentorSlotsByDay[day]).forEach(mentor => {
-        mentorSlotsByDay[day][mentor].sort(
-          (a, b) => a.startMin - b.startMin || a.endMin - b.endMin
-        );
-      });
-    });
+    const sessionMinutesByMentorDay = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
 
     const resolveAssignedDay = (student, mentor) => {
       const explicitDay =
@@ -1286,6 +1274,61 @@ export default function MentorAssignmentPage() {
       });
     });
 
+    const resolveSessionMinutesForMentorDay = (day, mentor) => {
+      const requestStudents = studentsByMentorDay?.[day]?.[mentor] || [];
+      const counts = new Map();
+      const durationFromSlot = (startRaw, endRaw) => {
+        const st = toMin(startRaw);
+        let en = toMin(endRaw);
+        if (Number.isNaN(st) || Number.isNaN(en)) return null;
+        if (en < st) en += 1440;
+        const duration = en - st;
+        if (!Number.isFinite(duration) || duration < 10) return null;
+        return duration;
+      };
+      requestStudents.forEach(item => {
+        const slotDuration = durationFromSlot(item?.fixedSlotStart, item?.fixedSlotEnd);
+        if (slotDuration != null) {
+          counts.set(slotDuration, (counts.get(slotDuration) || 0) + 1);
+        }
+        const minutes = Math.floor(
+          Number(item?.student?.mentorHistory?.[selectedPeriod]?.sessionMinutes)
+        );
+        if (!Number.isFinite(minutes) || minutes < 10) return;
+        counts.set(minutes, (counts.get(minutes) || 0) + 1);
+      });
+      if (!counts.size) return minOverlapRequired;
+      return Array.from(counts.entries())
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          return a[0] - b[0];
+        })[0][0];
+    };
+
+    DAYS.forEach(day => {
+      (mentorsByDay?.[day] || []).forEach(entry => {
+        const mentor = n(entry?.name);
+        if (!mentor) return;
+        if (!mentorSlotsByDay[day][mentor]) mentorSlotsByDay[day][mentor] = [];
+
+        const sessionMinutes =
+          Number(sessionMinutesByMentorDay?.[day]?.[mentor] || 0) >= 10
+            ? Number(sessionMinutesByMentorDay[day][mentor])
+            : resolveSessionMinutesForMentorDay(day, mentor);
+        sessionMinutesByMentorDay[day][mentor] = sessionMinutes;
+
+        mentorSlotsByDay[day][mentor].push(
+          ...buildSlotsFromMentorTime(mTime(entry), sessionMinutes)
+        );
+      });
+
+      Object.keys(mentorSlotsByDay[day]).forEach(mentor => {
+        mentorSlotsByDay[day][mentor].sort(
+          (a, b) => a.startMin - b.startMin || a.endMin - b.endMin
+        );
+      });
+    });
+
     DAYS.forEach(day => {
       const mentorSet = new Set([
         ...Object.keys(mentorSlotsByDay[day] || {}),
@@ -1293,6 +1336,10 @@ export default function MentorAssignmentPage() {
       ]);
 
       mentorSet.forEach(mentor => {
+        const requiredOverlapMinutes = Math.max(
+          10,
+          Number(sessionMinutesByMentorDay?.[day]?.[mentor] || minOverlapRequired)
+        );
         const slots = (mentorSlotsByDay[day]?.[mentor] || []).map(slot => ({
           ...slot,
           studentId: null,
@@ -1321,7 +1368,7 @@ export default function MentorAssignmentPage() {
             const eligible = [];
             slots.forEach((slot, idx) => {
               const ov = overlapWithAnyRange(attRanges, slot.startMin, slot.endMin);
-              if (ov >= minOverlapRequired) eligible.push(idx);
+              if (ov >= requiredOverlapMinutes) eligible.push(idx);
             });
 
             let fixedIdx = -1;
@@ -1785,7 +1832,11 @@ export default function MentorAssignmentPage() {
           manualApplied: true,
           slotStart: undefined,
           slotEnd: undefined,
-          sessionMinutes: undefined,
+          sessionMinutes:
+            Number.isFinite(Number(recNow?.sessionMinutes)) &&
+            Number(recNow?.sessionMinutes) >= 10
+              ? Number(recNow.sessionMinutes)
+              : minOverlapRequired,
         };
         return {
           ...s,
