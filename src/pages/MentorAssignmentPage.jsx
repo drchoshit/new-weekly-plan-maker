@@ -560,6 +560,7 @@ export default function MentorAssignmentPage() {
             [selectedPeriod]: {
               ...old,
               mentor: mentorName,
+              actualMentor: mentorName,
               day: pickedDay,
               slotStart: undefined,
               slotEnd: undefined,
@@ -572,6 +573,8 @@ export default function MentorAssignmentPage() {
         };
       })
     );
+    // 수동 선택 직후에는 계산 기준 시간표를 바로 보여준다.
+    setTimelineViewMode("computed");
   };
 
   const loadText = nextStudents => {
@@ -1101,11 +1104,13 @@ export default function MentorAssignmentPage() {
         ? {
             ...s,
             selectedMentor: mentor,
+            selectedMentorDay: day,
             mentorHistory: {
               ...(s.mentorHistory || {}),
               [selectedPeriod]: {
                 ...(s.mentorHistory?.[selectedPeriod] || {}),
                 mentor,
+                actualMentor: mentor,
                 day,
               },
             },
@@ -1147,11 +1152,13 @@ export default function MentorAssignmentPage() {
         ? {
             ...s,
             selectedMentor: fixed,
+            selectedMentorDay: day,
             mentorHistory: {
               ...(s.mentorHistory || {}),
               [selectedPeriod]: {
                 ...(s.mentorHistory?.[selectedPeriod] || {}),
                 mentor: fixed,
+                actualMentor: fixed,
                 day,
               },
             },
@@ -1773,6 +1780,7 @@ export default function MentorAssignmentPage() {
           rescheduleDate,
           rescheduleDay: manualDay,
           mentor: manualMentor,
+          actualMentor: manualMentor,
           day: manualDay,
           manualApplied: true,
           slotStart: undefined,
@@ -1787,6 +1795,7 @@ export default function MentorAssignmentPage() {
         };
       })
     );
+    setTimelineViewMode("computed");
 
     setPopup({
       title: "수동 배정 적용",
