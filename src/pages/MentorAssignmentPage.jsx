@@ -269,10 +269,31 @@ const normalizeTimelineByDay = timelineByDay =>
     return acc;
   }, {});
 
-const buildTimelineSignature = ({ timelineByDay, sessionMinutes, maxStudentsPerMentor }) =>
+const toCapacityNumber = value => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.max(0, Math.min(50, Math.floor(num)));
+};
+const normalizeMentorCapacityByName = value =>
+  Object.entries(value || {})
+    .map(([mentorName, limit]) => [n(mentorName), toCapacityNumber(limit)])
+    .filter(([mentorName, limit]) => mentorName && limit != null)
+    .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
+    .reduce((acc, [mentorName, limit]) => {
+      acc[mentorName] = Number(limit);
+      return acc;
+    }, {});
+
+const buildTimelineSignature = ({
+  timelineByDay,
+  sessionMinutes,
+  maxStudentsPerMentor,
+  mentorCapacityByName,
+}) =>
   JSON.stringify({
     sessionMinutes: Number(sessionMinutes || 0),
     maxStudentsPerMentor: Number(maxStudentsPerMentor || 0),
+    mentorCapacityByName: normalizeMentorCapacityByName(mentorCapacityByName),
     timelineByDay: normalizeTimelineByDay(timelineByDay),
   });
 
@@ -293,6 +314,7 @@ export default function MentorAssignmentPage() {
   } = useSchedule();
 
   const [maxPerMentor, setMaxPerMentor] = useState(6);
+  const [mentorCapacityByName, setMentorCapacityByName] = useState({});
   const [popup, setPopup] = useState({ title: "", text: "" });
   const [lastAutoAssignMissingIds, setLastAutoAssignMissingIds] = useState([]);
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
@@ -318,6 +340,36 @@ export default function MentorAssignmentPage() {
     () => Array.from(profiles.keys()).sort((a, b) => a.localeCompare(b, "ko")),
     [profiles]
   );
+  const mentorCapacityMentorNames = useMemo(() => {
+    const names = new Set(mentorNames);
+    students.forEach(student => {
+      const fixedMentor = n(student?.fixedMentor);
+      if (fixedMentor) names.add(fixedMentor);
+    });
+    return Array.from(names).sort((a, b) => String(a || "").localeCompare(String(b || ""), "ko"));
+  }, [mentorNames, students]);
+  const normalizedMentorCapacityByName = useMemo(
+    () => normalizeMentorCapacityByName(mentorCapacityByName),
+    [mentorCapacityByName]
+  );
+  const setMentorCapacityLimit = (mentorName, rawValue) => {
+    const name = n(mentorName);
+    if (!name) return;
+    setMentorCapacityByName(prev => {
+      const next = { ...(prev || {}) };
+      if (rawValue === "") {
+        delete next[name];
+        return next;
+      }
+      const parsed = toCapacityNumber(rawValue);
+      if (parsed == null) {
+        delete next[name];
+        return next;
+      }
+      next[name] = parsed;
+      return next;
+    });
+  };
   const periodAttendance = attendance?.[selectedPeriod] || {};
   const aMap = useMemo(() => {
     const m = new Map();
@@ -591,20 +643,26 @@ export default function MentorAssignmentPage() {
     });
 
     const mentorRemainingCapacity = {};
+    const resolveCapacityForMentor = mentorName => {
+      const name = n(mentorName);
+      const override = normalizedMentorCapacityByName[name];
+      if (override == null) return Number(maxPerMentor);
+      return Number(override);
+    };
     Object.keys(mentorDaySlots).forEach(mdKey => {
       const [mentor = ""] = String(mdKey).split("@@");
       const name = n(mentor);
       if (!name) return;
       if (mentorRemainingCapacity[name] == null) {
-        mentorRemainingCapacity[name] = Number(maxPerMentor);
+        mentorRemainingCapacity[name] = resolveCapacityForMentor(name);
       }
     });
     const hasRemainingCapacity = mentor =>
-      Number(mentorRemainingCapacity[n(mentor)] ?? Number(maxPerMentor)) > 0;
+      Number(mentorRemainingCapacity[n(mentor)] ?? resolveCapacityForMentor(mentor)) > 0;
     const consumeCapacity = mentor => {
       const name = n(mentor);
       if (!name) return;
-      const current = Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor));
+      const current = Number(mentorRemainingCapacity[name] ?? resolveCapacityForMentor(name));
       mentorRemainingCapacity[name] = Math.max(0, current - 1);
     };
     const reservedSlotKeys = new Set();
@@ -710,7 +768,7 @@ export default function MentorAssignmentPage() {
       );
       const fixedPool = withSlots.filter(c => c.mentor === fixedMentor);
       const fixedEligibleSlots = buildEligibleSlotRefs(s, fixedPool).filter(
-        item => !reservedSlotKeys.has(item.key) && hasRemainingCapacity(item?.candidate?.mentor)
+        item => !reservedSlotKeys.has(item.key)
       );
       const fixedChosenEntry = fixedEligibleSlots[0] || null;
       const fixedForcedDay = fixedChosenEntry?.candidate?.day || resolveFixedMentorDay(s) || "";
@@ -724,9 +782,9 @@ export default function MentorAssignmentPage() {
 
       if (fixedChosenEntry) {
         reservedSlotKeys.add(fixedChosenEntry.key);
-        consumeCapacity(fixedChosenEntry?.candidate?.mentor);
-        loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
       }
+      consumeCapacity(fixedMentor);
+      loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
 
       pick[s.id] = {
         ranks: rankSource.slice(0, 5),
@@ -794,7 +852,10 @@ export default function MentorAssignmentPage() {
       mentorNamesFromFlow.forEach((name, idx) => {
         const node = mentorStart + idx;
         mentorNodeByName.set(name, node);
-        const remainingCap = Math.max(0, Number(mentorRemainingCapacity[name] ?? Number(maxPerMentor)));
+        const remainingCap = Math.max(
+          0,
+          Number(mentorRemainingCapacity[name] ?? resolveCapacityForMentor(name))
+        );
         if (remainingCap > 0) addEdge(node, T, remainingCap);
       });
 
@@ -1004,11 +1065,17 @@ export default function MentorAssignmentPage() {
       .sort((a, b) => b[1] - a[1])
       .map(([m, c]) => `${m}: ${c}명`)
       .join("\n");
+    const mentorCapacitySummary = Object.entries(normalizedMentorCapacityByName)
+      .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "ko"))
+      .map(([mentorName, limit]) => `${mentorName} ${limit}명`)
+      .join(", ");
     setPopup({
       title: "자동 배정 완료",
       text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
         students.length - assignableStudents.length
-      }명\n최대 인원: ${maxPerMentor}명\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
+      }명\n최대 인원(기본): ${maxPerMentor}명\n멘토별 최대 인원: ${
+        mentorCapacitySummary || "없음"
+      }\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
         preferredPriorityDay ? `${preferredPriorityDay}요일` : "없음"
       }\n배정 방식: 고정멘토 우선 + 슬롯 기반 최대 배정\n(슬롯 배정 ${slotAssignedCount}명 / 고정멘토 강제배정 ${fixedForcedCount}명)\n\n${
         lines || "배정 없음"
@@ -1364,11 +1431,13 @@ export default function MentorAssignmentPage() {
       timelineByDay: normalizedTimelineByDay,
       sessionMinutes: minOverlapRequired,
       maxStudentsPerMentor: maxPerMentor,
+      mentorCapacityByName: normalizedMentorCapacityByName,
     });
     const savedSignature = buildTimelineSignature({
       timelineByDay: savedTimelineByDay,
       sessionMinutes: savedSnapshotSessionMinutes,
       maxStudentsPerMentor: Number(savedSnapshot?.settings?.maxStudentsPerMentor || 0),
+      mentorCapacityByName: savedSnapshot?.settings?.mentorCapacityByName || {},
     });
     return currentSignature !== savedSignature;
   }, [
@@ -1378,6 +1447,7 @@ export default function MentorAssignmentPage() {
     normalizedTimelineByDay,
     minOverlapRequired,
     maxPerMentor,
+    normalizedMentorCapacityByName,
     savedTimelineByDay,
     savedSnapshotSessionMinutes,
     savedSnapshot,
@@ -1397,6 +1467,7 @@ export default function MentorAssignmentPage() {
         settings: {
           sessionMinutes: Number(minOverlapRequired),
           maxStudentsPerMentor: Number(maxPerMentor),
+          mentorCapacityByName: normalizedMentorCapacityByName,
         },
         timelineByDay: normalizedTimelineByDay,
       },
@@ -1580,6 +1651,11 @@ export default function MentorAssignmentPage() {
       settings: {
         maxStudentsPerMentor: Number(
           hasSavedSnapshot ? savedSnapshot?.settings?.maxStudentsPerMentor : maxPerMentor
+        ),
+        mentorCapacityByName: normalizeMentorCapacityByName(
+          hasSavedSnapshot
+            ? savedSnapshot?.settings?.mentorCapacityByName
+            : normalizedMentorCapacityByName
         ),
         sessionMinutes: Number(
           hasSavedSnapshot ? savedSnapshotSessionMinutes : minOverlapRequired
@@ -1849,6 +1925,44 @@ export default function MentorAssignmentPage() {
         >
           멘토 매칭 정보 저장하기
         </button>
+      </div>
+      <div className="rounded border bg-slate-50 p-3">
+        <div className="text-sm font-semibold text-slate-800">
+          멘토별 최대 학생 수 설정 (고정학생 포함)
+        </div>
+        <div className="mt-1 text-xs text-slate-600">
+          기본값은 {maxPerMentor}명이며, 멘토별로 개별 상한을 지정하면 자동 배정 시 우선 반영됩니다.
+        </div>
+        {mentorCapacityMentorNames.length === 0 ? (
+          <div className="mt-2 text-xs text-slate-500">설정 가능한 멘토가 없습니다.</div>
+        ) : (
+          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {mentorCapacityMentorNames.map(mentorName => (
+              <label
+                key={`mentor-capacity-${mentorName}`}
+                className="flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-2"
+              >
+                <span className="text-sm text-slate-800">{mentorName}</span>
+                <select
+                  className="border rounded px-2 py-1 text-sm"
+                  value={
+                    normalizedMentorCapacityByName[mentorName] == null
+                      ? ""
+                      : String(normalizedMentorCapacityByName[mentorName])
+                  }
+                  onChange={e => setMentorCapacityLimit(mentorName, e.target.value)}
+                >
+                  <option value="">기본({maxPerMentor}명)</option>
+                  {Array.from({ length: 21 }, (_, i) => i).map(v => (
+                    <option key={`mentor-capacity-value-${mentorName}-${v}`} value={v}>
+                      {v}명
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span className="text-xs text-slate-600">요일 우선 배정</span>
