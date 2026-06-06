@@ -958,7 +958,7 @@ export default function MentorAssignmentPage() {
         const fixedReason = rank =>
           `고정멘토 우선 배정(시간 미일치)\n선택 멘토: ${rank.mentor || "-"}\n선택 요일: ${
             rank.day || "미지정"
-          }\n※ 자동배정 누락 학생 목록에 표시됩니다.`;
+          }\n※ 원장 강제 배정 학생 목록에 표시됩니다.`;
         return {
           studentId: s.id,
           first: r[0]?.mentor || "",
@@ -1058,7 +1058,9 @@ export default function MentorAssignmentPage() {
       })
     );
 
-    const missingFromAutoAssign = assignableStudents.filter(s => !pick[s.id]?.chosen);
+    const missingFromAutoAssign = assignableStudents.filter(
+      s => !pick[s.id]?.chosen && !n(pick[s.id]?.forcedFixedMentor)
+    );
     setLastAutoAssignMissingIds(missingFromAutoAssign.map(s => s.id));
     setLastAutoAssignAt(new Date().toISOString());
     setTimelineViewMode("computed");
@@ -1586,6 +1588,27 @@ export default function MentorAssignmentPage() {
       .map(s => ({ id: s.id, name: s.name }))
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
   }, [students, lastAutoAssignMissingIds]);
+
+  const directorForcedAssignedStudents = useMemo(
+    () =>
+      students
+        .filter(s => {
+          if (isMentoringOptOut(s)) return false;
+          const rec = s?.mentorHistory?.[selectedPeriod] || {};
+          return rec?.fixedNoOverlap === true;
+        })
+        .map(s => {
+          const rec = s?.mentorHistory?.[selectedPeriod] || {};
+          return {
+            id: s.id,
+            name: s.name,
+            mentor: n(rec?.actualMentor) || n(rec?.mentor) || n(s?.fixedMentor) || "-",
+            day: n(rec?.day) || n(s?.selectedMentorDay) || "-",
+          };
+        })
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
+    [students, selectedPeriod]
+  );
 
   const downloadMentorMatchingInfo = () => {
     if (!selectedPeriod) {
@@ -2229,7 +2252,7 @@ export default function MentorAssignmentPage() {
         </table>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="border rounded p-3 bg-amber-50 shadow-sm">
           <h2 className="text-lg font-semibold mb-2">총괄멘토링 미희망 학생</h2>
           {mentoringOptOutStudents.length === 0 ? (
@@ -2245,6 +2268,29 @@ export default function MentorAssignmentPage() {
                   >
                     {student.name}
                   </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="border rounded p-3 bg-indigo-50 shadow-sm">
+          <h2 className="text-lg font-semibold mb-2">원장 강제 배정 학생</h2>
+          {directorForcedAssignedStudents.length === 0 ? (
+            <div className="text-sm text-gray-500">기록 없음</div>
+          ) : (
+            <div className="space-y-2">
+              <div className="text-sm text-gray-600">총 {directorForcedAssignedStudents.length}명</div>
+              <div className="space-y-1">
+                {directorForcedAssignedStudents.map(student => (
+                  <div
+                    key={`director-forced-${student.id}`}
+                    className="rounded-md border border-indigo-100 bg-white/80 px-2 py-1 text-sm text-indigo-950"
+                  >
+                    <span className="font-semibold">{student.name}</span>
+                    <span className="ml-2 text-xs text-indigo-700">
+                      {student.mentor} · {student.day === "-" ? "요일 미지정" : `${student.day}요일`}
+                    </span>
+                  </div>
                 ))}
               </div>
             </div>
