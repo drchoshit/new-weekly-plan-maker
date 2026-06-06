@@ -1598,12 +1598,9 @@ export default function MentorAssignmentPage() {
           return rec?.fixedNoOverlap === true;
         })
         .map(s => {
-          const rec = s?.mentorHistory?.[selectedPeriod] || {};
           return {
             id: s.id,
             name: s.name,
-            mentor: n(rec?.actualMentor) || n(rec?.mentor) || n(s?.fixedMentor) || "-",
-            day: n(rec?.day) || n(s?.selectedMentorDay) || "-",
           };
         })
         .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
@@ -2278,19 +2275,16 @@ export default function MentorAssignmentPage() {
           {directorForcedAssignedStudents.length === 0 ? (
             <div className="text-sm text-gray-500">기록 없음</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1">
               <div className="text-sm text-gray-600">총 {directorForcedAssignedStudents.length}명</div>
-              <div className="space-y-1">
+              <div className="flex flex-wrap gap-2">
                 {directorForcedAssignedStudents.map(student => (
-                  <div
+                  <span
                     key={`director-forced-${student.id}`}
-                    className="rounded-md border border-indigo-100 bg-white/80 px-2 py-1 text-sm text-indigo-950"
+                    className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-sm font-semibold text-indigo-950"
                   >
-                    <span className="font-semibold">{student.name}</span>
-                    <span className="ml-2 text-xs text-indigo-700">
-                      {student.mentor} · {student.day === "-" ? "요일 미지정" : `${student.day}요일`}
-                    </span>
-                  </div>
+                    {student.name}
+                  </span>
                 ))}
               </div>
             </div>
