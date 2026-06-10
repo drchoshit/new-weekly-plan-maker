@@ -6,6 +6,8 @@ import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const PRIORITY_BUTTON_DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0", "\uC77C"];
+const DIRECTOR_MENTOR_NAME = "\uC6D0\uC7A5\uB2D8";
+const MAX_MENTOR_CAPACITY_OPTION = 30;
 const KOREAN = ["\uC5B8\uB9E4", "\uD654\uC791", "\uACF5\uD1B5"].map(v => ({ value: v, label: v }));
 const MATH = ["\uBBF8\uC801", "\uD655\uD1B5", "\uAE30\uD558", "\uACF5\uD1B5"].map(v => ({
   value: v,
@@ -41,6 +43,15 @@ const PERSONALITY_OPTIONS = [
 ].map(v => ({ value: v, label: v || "\uC120\uD0DD" }));
 
 const n = v => String(v || "").trim();
+const parseStudentNameList = value =>
+  Array.from(
+    new Set(
+      String(value || "")
+        .split(/[,，、\n\r]+/)
+        .map(v => n(v))
+        .filter(Boolean)
+    )
+  );
 const dayFromYmd = ymd => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(n(ymd));
   if (!m) return "";
@@ -319,6 +330,7 @@ export default function MentorAssignmentPage() {
   const [lastAutoAssignMissingIds, setLastAutoAssignMissingIds] = useState([]);
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
   const [timelineViewMode, setTimelineViewMode] = useState("computed");
+  const [directorConsultingInput, setDirectorConsultingInput] = useState("");
   const closePopup = () => setPopup({ title: "", text: "" });
   const minOverlapRequired = Math.max(10, Number(mentorSessionDuration) || 20);
   const setSessionDuration = value =>
@@ -409,6 +421,7 @@ export default function MentorAssignmentPage() {
     delete old.slotStart;
     delete old.slotEnd;
     delete old.sessionMinutes;
+    delete old.fixedNoOverlap;
     return {
       ...student,
       selectedMentor: "",
@@ -614,6 +627,76 @@ export default function MentorAssignmentPage() {
         (prev || []).map(a => (a.studentId === studentId ? emptyAssignment(studentId) : a))
       );
     }
+  };
+
+  const assignDirectorConsultingStudents = () => {
+    const targetNames = parseStudentNameList(directorConsultingInput);
+    if (!targetNames.length) {
+      window.alert("원장컨설팅 대상 학생 이름을 입력해 주세요.");
+      return;
+    }
+
+    const targetNameSet = new Set(targetNames);
+    const matchedStudents = students.filter(s => targetNameSet.has(n(s?.name)));
+    const matchedNameSet = new Set(matchedStudents.map(s => n(s?.name)));
+    const missingNames = targetNames.filter(name => !matchedNameSet.has(name));
+
+    if (matchedStudents.length) {
+      const targetIds = new Set(matchedStudents.map(s => s.id));
+      setStudents(prev =>
+        prev.map(s =>
+          targetIds.has(s.id)
+            ? {
+                ...s,
+                fixedMentor: DIRECTOR_MENTOR_NAME,
+              }
+            : s
+        )
+      );
+      setTimelineViewMode("computed");
+    }
+
+    setDirectorConsultingInput("");
+    setPopup({
+      title: "원장컨설팅 고정멘토 배정",
+      text: [
+        matchedStudents.length
+          ? `배정 완료: ${matchedStudents.map(s => s.name).join(", ")}`
+          : "배정 완료: 없음",
+        missingNames.length ? `학생 목록에서 찾지 못함: ${missingNames.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  };
+
+  const completeDirectorConsulting = studentId => {
+    const target = students.find(s => s.id === studentId);
+    if (!target) return;
+
+    setStudents(prev =>
+      prev.map(s => {
+        if (s.id !== studentId) return s;
+
+        const rec = selectedPeriod ? s?.mentorHistory?.[selectedPeriod] || {} : {};
+        const fixedIsDirector = n(s?.fixedMentor) === DIRECTOR_MENTOR_NAME;
+        const currentIsDirector =
+          n(s?.selectedMentor) === DIRECTOR_MENTOR_NAME ||
+          n(rec?.mentor) === DIRECTOR_MENTOR_NAME ||
+          n(rec?.actualMentor) === DIRECTOR_MENTOR_NAME;
+        const next = fixedIsDirector ? { ...s, fixedMentor: "" } : s;
+
+        return selectedPeriod && currentIsDirector ? clearCurrentMentoring(next) : next;
+      })
+    );
+    setAssignments(prev =>
+      (prev || []).map(a => (a.studentId === studentId ? emptyAssignment(studentId) : a))
+    );
+    setTimelineViewMode("computed");
+    setPopup({
+      title: "원장컨설팅 진행 완료",
+      text: `${target.name}: 고정멘토 원장님을 빈칸으로 되돌렸습니다.`,
+    });
   };
 
   const autoAssign = (preferredDayRaw = "") => {
@@ -1595,12 +1678,29 @@ export default function MentorAssignmentPage() {
         .filter(s => {
           if (isMentoringOptOut(s)) return false;
           const rec = s?.mentorHistory?.[selectedPeriod] || {};
-          return rec?.fixedNoOverlap === true;
+          const fixedMentor = n(s?.fixedMentor);
+          const currentMentor =
+            n(s?.selectedMentor) || n(rec?.actualMentor) || n(rec?.mentor);
+          return (
+            fixedMentor === DIRECTOR_MENTOR_NAME ||
+            currentMentor === DIRECTOR_MENTOR_NAME ||
+            rec?.fixedNoOverlap === true
+          );
         })
         .map(s => {
+          const rec = s?.mentorHistory?.[selectedPeriod] || {};
+          const fixedMentor = n(s?.fixedMentor);
+          const currentMentor =
+            n(s?.selectedMentor) || n(rec?.actualMentor) || n(rec?.mentor);
           return {
             id: s.id,
             name: s.name,
+            fixedMentor,
+            currentMentor,
+            isDirectorConsulting:
+              fixedMentor === DIRECTOR_MENTOR_NAME ||
+              currentMentor === DIRECTOR_MENTOR_NAME,
+            isFixedNoOverlap: rec?.fixedNoOverlap === true,
           };
         })
         .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
@@ -1969,7 +2069,7 @@ export default function MentorAssignmentPage() {
           value={maxPerMentor}
           onChange={e => setMaxPerMentor(Number(e.target.value))}
         >
-          {Array.from({ length: 20 }, (_, i) => i + 1).map(v => (
+          {Array.from({ length: MAX_MENTOR_CAPACITY_OPTION }, (_, i) => i + 1).map(v => (
             <option key={v} value={v}>
               {v}명
             </option>
@@ -2033,7 +2133,7 @@ export default function MentorAssignmentPage() {
                   onChange={e => setMentorCapacityLimit(mentorName, e.target.value)}
                 >
                   <option value="">기본({maxPerMentor}명)</option>
-                  {Array.from({ length: 21 }, (_, i) => i).map(v => (
+                  {Array.from({ length: MAX_MENTOR_CAPACITY_OPTION + 1 }, (_, i) => i).map(v => (
                     <option key={`mentor-capacity-value-${mentorName}-${v}`} value={v}>
                       {v}명
                     </option>
@@ -2272,6 +2372,25 @@ export default function MentorAssignmentPage() {
         </div>
         <div className="border rounded p-3 bg-indigo-50 shadow-sm">
           <h2 className="text-lg font-semibold mb-2">원장 강제 배정 학생</h2>
+          <div className="mb-3 space-y-2">
+            <label className="block text-sm font-medium text-indigo-950">
+              이번주 원장컨설팅 대상
+            </label>
+            <textarea
+              className="h-16 w-full resize-none rounded border border-indigo-200 bg-white px-2 py-1 text-sm"
+              placeholder="홍길동, 김하윤, 김도균"
+              value={directorConsultingInput}
+              onChange={e => setDirectorConsultingInput(e.target.value)}
+            />
+            <button
+              type="button"
+              className="rounded bg-indigo-600 px-3 py-1 text-sm font-semibold text-white disabled:opacity-40"
+              onClick={assignDirectorConsultingStudents}
+              disabled={!n(directorConsultingInput)}
+            >
+              배정
+            </button>
+          </div>
           {directorForcedAssignedStudents.length === 0 ? (
             <div className="text-sm text-gray-500">기록 없음</div>
           ) : (
@@ -2279,12 +2398,28 @@ export default function MentorAssignmentPage() {
               <div className="text-sm text-gray-600">총 {directorForcedAssignedStudents.length}명</div>
               <div className="flex flex-wrap gap-2">
                 {directorForcedAssignedStudents.map(student => (
-                  <span
+                  <label
                     key={`director-forced-${student.id}`}
-                    className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-sm font-semibold text-indigo-950"
+                    className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-sm font-semibold text-indigo-950"
                   >
-                    {student.name}
-                  </span>
+                    {student.isDirectorConsulting ? (
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5"
+                        checked={false}
+                        onChange={e => {
+                          if (e.target.checked) completeDirectorConsulting(student.id);
+                        }}
+                        title="진행 완료"
+                      />
+                    ) : null}
+                    <span>{student.name}</span>
+                    {student.isDirectorConsulting ? (
+                      <span className="text-[11px] text-indigo-700">원장님</span>
+                    ) : student.isFixedNoOverlap ? (
+                      <span className="text-[11px] text-indigo-700">시간 미일치</span>
+                    ) : null}
+                  </label>
                 ))}
               </div>
             </div>
