@@ -263,8 +263,12 @@ const normalizeTimelineByDay = timelineByDay =>
           slots: (info?.slots || []).map(slot => ({
             start: n(slot?.start),
             end: n(slot?.end),
-            startMin: Number(slot?.startMin),
-            endMin: Number(slot?.endMin),
+            startMin: Number.isFinite(Number(slot?.startMin))
+              ? Number(slot.startMin)
+              : toMin(slot?.start),
+            endMin: Number.isFinite(Number(slot?.endMin))
+              ? Number(slot.endMin)
+              : toMin(slot?.end),
             studentId: slot?.studentId ?? null,
             studentName: n(slot?.studentName),
             studentAttendanceLabel: n(slot?.studentAttendanceLabel),
@@ -277,6 +281,21 @@ const normalizeTimelineByDay = timelineByDay =>
         };
       });
     acc[day] = dayMap;
+    return acc;
+  }, {});
+
+const normalizeImportedTimelineByDay = timelineByDay =>
+  DAYS.reduce((acc, day) => {
+    const rawDay = timelineByDay?.[day];
+    if (Array.isArray(rawDay)) {
+      acc[day] = rawDay.reduce((dayMap, info) => {
+        const mentor = n(info?.mentor);
+        if (mentor) dayMap[mentor] = info;
+        return dayMap;
+      }, {});
+    } else {
+      acc[day] = rawDay && typeof rawDay === "object" ? rawDay : {};
+    }
     return acc;
   }, {});
 
@@ -315,7 +334,9 @@ export default function MentorAssignmentPage() {
     mentorsByDay,
     attendance,
     selectedPeriod,
+    setSelectedPeriod,
     periods,
+    setPeriods,
     assignments,
     setAssignments,
     mentorSessionDuration,
@@ -331,6 +352,8 @@ export default function MentorAssignmentPage() {
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
   const [timelineViewMode, setTimelineViewMode] = useState("computed");
   const [directorConsultingInput, setDirectorConsultingInput] = useState("");
+  const restoreFileInputRef = React.useRef(null);
+  const lastAutoSnapshotAtRef = React.useRef("");
   const closePopup = () => setPopup({ title: "", text: "" });
   const minOverlapRequired = Math.max(10, Number(mentorSessionDuration) || 20);
   const setSessionDuration = value =>
@@ -339,7 +362,7 @@ export default function MentorAssignmentPage() {
   useEffect(() => {
     setLastAutoAssignMissingIds([]);
     setLastAutoAssignAt("");
-    setTimelineViewMode("computed");
+    setTimelineViewMode("saved");
   }, [selectedPeriod]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
@@ -1562,6 +1585,35 @@ export default function MentorAssignmentPage() {
     10,
     Number(savedSnapshot?.settings?.sessionMinutes || 0)
   );
+
+  useEffect(() => {
+    if (!selectedPeriod || !lastAutoAssignAt) return;
+    if (lastAutoSnapshotAtRef.current === lastAutoAssignAt) return;
+    lastAutoSnapshotAtRef.current = lastAutoAssignAt;
+
+    setMentorAssignmentSnapshots(prev => ({
+      ...(prev || {}),
+      [selectedPeriod]: {
+        periodId: selectedPeriod,
+        savedAt: lastAutoAssignAt,
+        settings: {
+          sessionMinutes: Number(minOverlapRequired),
+          maxStudentsPerMentor: Number(maxPerMentor),
+          mentorCapacityByName: normalizedMentorCapacityByName,
+        },
+        timelineByDay: normalizedTimelineByDay,
+      },
+    }));
+    setTimelineViewMode("saved");
+  }, [
+    selectedPeriod,
+    lastAutoAssignAt,
+    normalizedTimelineByDay,
+    minOverlapRequired,
+    maxPerMentor,
+    normalizedMentorCapacityByName,
+    setMentorAssignmentSnapshots,
+  ]);
   const snapshotIsDirty = useMemo(() => {
     if (!selectedPeriod || !hasSavedSnapshot) {
       return true;
@@ -1859,6 +1911,155 @@ export default function MentorAssignmentPage() {
     URL.revokeObjectURL(url);
   };
 
+  const restoreMentorMatchingInfo = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const payload = JSON.parse(await file.text());
+      if (payload?.scope !== "mentorMatchingInfo") {
+        throw new Error("멘토 매칭 정보 저장 파일이 아닙니다.");
+      }
+
+      const periodId = n(payload?.periodId);
+      if (!periodId) throw new Error("파일에 기준 주차 정보가 없습니다.");
+
+      const importedTimeline = normalizeTimelineByDay(
+        normalizeImportedTimelineByDay(payload?.mentoringTimelineByDay)
+      );
+      const hasTimeline = DAYS.some(day =>
+        Object.keys(importedTimeline?.[day] || {}).length > 0
+      );
+      if (!hasTimeline) {
+        throw new Error("파일에 복구할 요일별 멘토링 현황표가 없습니다.");
+      }
+
+      const settings = payload?.settings || {};
+      const restoredSessionMinutes = Math.max(
+        10,
+        Number(settings?.sessionMinutes || mentorSessionDuration || 20)
+      );
+      const restoredMaxPerMentor = Math.max(
+        1,
+        Number(settings?.maxStudentsPerMentor || maxPerMentor || 6)
+      );
+      const restoredCapacity = normalizeMentorCapacityByName(
+        settings?.mentorCapacityByName || {}
+      );
+      const restoredAt = n(payload?.exportedAt) || new Date().toISOString();
+      const detailRows = Array.isArray(payload?.studentsDetail)
+        ? payload.studentsDetail
+        : [];
+      const detailById = new Map(
+        detailRows
+          .filter(row => row?.studentId != null)
+          .map(row => [String(row.studentId), row])
+      );
+      const detailByName = new Map(
+        detailRows.filter(row => n(row?.studentName)).map(row => [n(row.studentName), row])
+      );
+
+      setStudents(prev =>
+        prev.map(student => {
+          const row = detailById.get(String(student.id)) || detailByName.get(n(student.name));
+          if (!row) return student;
+          const mentor = n(row?.mentor);
+          const day = n(row?.day);
+          const old = student?.mentorHistory?.[periodId] || {};
+          return {
+            ...student,
+            mentoringOptOut: row?.mentoringOptOut === true,
+            selectedMentor: mentor,
+            selectedMentorDay: day,
+            mentorHistory: {
+              ...(student.mentorHistory || {}),
+              [periodId]: {
+                ...old,
+                mentor,
+                actualMentor: mentor,
+                day,
+                slotStart: n(row?.slotStart),
+                slotEnd: n(row?.slotEnd),
+                sessionMinutes: restoredSessionMinutes,
+                attended: row?.attended !== false,
+                missedDay: n(row?.missedDay) || undefined,
+                missedReason: n(row?.missedReason) || undefined,
+                manualMentor: n(row?.manualMentor) || undefined,
+                rescheduleDate: n(row?.rescheduleDate) || undefined,
+                rescheduleDay: n(row?.rescheduleDay) || undefined,
+              },
+            },
+          };
+        })
+      );
+
+      setAssignments(prev => {
+        const previousById = new Map((prev || []).map(row => [String(row.studentId), row]));
+        const currentStudentIds = new Set(students.map(student => String(student.id)));
+        const restoredAssignments = students.map(student => {
+          const row = detailById.get(String(student.id)) || detailByName.get(n(student.name));
+          const old = previousById.get(String(student.id)) || emptyAssignment(student.id);
+          if (!row) return old;
+          if (row?.mentoringOptOut === true || !n(row?.mentor)) {
+            return emptyAssignment(student.id);
+          }
+          return {
+            ...old,
+            studentId: student.id,
+            first: n(row.mentor),
+            days: { ...(old.days || {}), first: n(row.day) },
+            reasons: {
+              ...(old.reasons || {}),
+              first: `${file.name} 파일에서 복구된 배정`,
+            },
+          };
+        });
+        const untouchedExtraAssignments = (prev || []).filter(
+          row => !currentStudentIds.has(String(row?.studentId))
+        );
+        return [...restoredAssignments, ...untouchedExtraAssignments];
+      });
+
+      setMentorSessionDuration(restoredSessionMinutes);
+      setMaxPerMentor(restoredMaxPerMentor);
+      setMentorCapacityByName(restoredCapacity);
+      setMentorAssignmentSnapshots(prev => ({
+        ...(prev || {}),
+        [periodId]: {
+          periodId,
+          savedAt: restoredAt,
+          restoredAt: new Date().toISOString(),
+          restoredFrom: file.name,
+          settings: {
+            sessionMinutes: restoredSessionMinutes,
+            maxStudentsPerMentor: restoredMaxPerMentor,
+            mentorCapacityByName: restoredCapacity,
+          },
+          timelineByDay: importedTimeline,
+        },
+      }));
+      setPeriods(prev => {
+        if ((prev || []).some(period => n(period?.id) === periodId)) return prev;
+        const [start = "", end = ""] = periodId.split("~").map(value => n(value));
+        return [
+          ...(prev || []),
+          { id: periodId, start, end, createdAt: Date.now() },
+        ];
+      });
+      setSelectedPeriod(periodId);
+      setTimelineViewMode("saved");
+      setLastAutoAssignMissingIds([]);
+      setLastAutoAssignAt("");
+      setPopup({
+        title: "멘토 매칭 정보 복구 완료",
+        text: `파일: ${file.name}\n기준 주차: ${periodId}\n요일별 멘토링 현황표와 학생별 배정을 저장 당시 상태로 복구했습니다.`,
+      });
+    } catch (error) {
+      window.alert(`복구하지 못했습니다.\n${error?.message || "파일 형식을 확인해 주세요."}`);
+    }
+  };
+
   const fixedMentorConflict = useMemo(() => {
     const map = {};
     students.forEach(student => {
@@ -2104,6 +2305,20 @@ export default function MentorAssignmentPage() {
           className="bg-emerald-600 text-white px-4 py-2 rounded"
         >
           멘토 매칭 정보 저장하기
+        </button>
+        <input
+          ref={restoreFileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={restoreMentorMatchingInfo}
+        />
+        <button
+          type="button"
+          onClick={() => restoreFileInputRef.current?.click()}
+          className="bg-amber-600 text-white px-4 py-2 rounded"
+        >
+          멘토 매칭 정보 복구하기
         </button>
       </div>
       <div className="rounded border bg-slate-50 p-3">
