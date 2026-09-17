@@ -2,11 +2,11 @@
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
+import { DIRECTOR_MENTOR_NAME, getPriorityMentor, isDirectorConsultingPending, setDirectorConsultingStatus } from "../utils/mentoringPriority.mjs";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const PRIORITY_BUTTON_DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0", "\uC77C"];
-const DIRECTOR_MENTOR_NAME = "\uC6D0\uC7A5\uB2D8";
 const MAX_MENTOR_CAPACITY_OPTION = 30;
 const KOREAN = ["\uC5B8\uB9E4", "\uD654\uC791", "\uACF5\uD1B5"].map(v => ({ value: v, label: v }));
 const MATH = ["\uBBF8\uC801", "\uD655\uD1B5", "\uAE30\uD558", "\uACF5\uD1B5"].map(v => ({
@@ -352,6 +352,7 @@ export default function MentorAssignmentPage() {
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
   const [timelineViewMode, setTimelineViewMode] = useState("computed");
   const [directorConsultingInput, setDirectorConsultingInput] = useState("");
+  const [reassignmentDrafts, setReassignmentDrafts] = useState({});
   const restoreFileInputRef = React.useRef(null);
   const lastAutoSnapshotAtRef = React.useRef("");
   const closePopup = () => setPopup({ title: "", text: "" });
@@ -363,7 +364,17 @@ export default function MentorAssignmentPage() {
     setLastAutoAssignMissingIds([]);
     setLastAutoAssignAt("");
     setTimelineViewMode("saved");
+    setReassignmentDrafts({});
   }, [selectedPeriod]);
+
+  useEffect(() => {
+    if (!selectedPeriod) return;
+    if (!students.some(s => !s.directorConsultingByPeriod && n(s.fixedMentor) === DIRECTOR_MENTOR_NAME)) return;
+    setStudents(prev => prev.map(s =>
+      !s.directorConsultingByPeriod && n(s.fixedMentor) === DIRECTOR_MENTOR_NAME
+        ? setDirectorConsultingStatus(s, selectedPeriod, "pending") : s
+    ));
+  }, [students, selectedPeriod, setStudents]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
   const prevPeriodId = useMemo(() => {
@@ -380,6 +391,7 @@ export default function MentorAssignmentPage() {
     students.forEach(student => {
       const fixedMentor = n(student?.fixedMentor);
       if (fixedMentor) names.add(fixedMentor);
+      if (n(student?.persistentFixedMentor)) names.add(n(student.persistentFixedMentor));
     });
     return Array.from(names).sort((a, b) => String(a || "").localeCompare(String(b || ""), "ko"));
   }, [mentorNames, students]);
@@ -445,6 +457,8 @@ export default function MentorAssignmentPage() {
     delete old.slotEnd;
     delete old.sessionMinutes;
     delete old.fixedNoOverlap;
+    delete old.assignmentIssue;
+    delete old.pendingReassignment;
     return {
       ...student,
       selectedMentor: "",
@@ -461,14 +475,20 @@ export default function MentorAssignmentPage() {
     const r = student?.mentorHistory?.[prevPeriodId];
     return r?.mentor ? { mentor: n(r.mentor), day: n(r.day) || null } : null;
   };
-  const activeMentor = student =>
-    isMentoringOptOut(student)
-      ? ""
-      : n(student?.mentorHistory?.[selectedPeriod]?.actualMentor) ||
-        n(student?.mentorHistory?.[selectedPeriod]?.mentor);
+  const activeMentor = student => {
+    if (isMentoringOptOut(student)) return "";
+    const rec = student?.mentorHistory?.[selectedPeriod] || {};
+    const mentor = n(rec.actualMentor) || n(rec.mentor);
+    // 이전 강제 배정 기록도 시간표와 실제 배정 인원에서 제외한다.
+    const fits = DAY_SET.has(n(rec.day))
+      ? hasOverlapOnDay(student, mentor, rec.day)
+      : hasAnyOverlapWithMentor(student, mentor);
+    if (rec.fixedNoOverlap || (mentor && !fits)) return "";
+    return mentor;
+  };
 
   const resolveFixedMentorDay = student => {
-    const fixedMentor = n(student?.fixedMentor);
+    const fixedMentor = getPriorityMentor(student, selectedPeriod);
     if (!fixedMentor) return "";
 
     let best = { day: "", ov: -1 };
@@ -478,7 +498,8 @@ export default function MentorAssignmentPage() {
       const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === fixedMentor);
       if (!entries.length) return;
       entries.forEach(entry => {
-        const ov = overlap(sTime, mTime(entry));
+        const attRanges = normalizeAttendanceRanges(sTime);
+        const ov = Math.max(0, ...ranges(mTime(entry)).map(r => overlapWithAnyRange(attRanges, r.st, r.en)));
         if (ov > best.ov) best = { day, ov };
       });
     });
@@ -494,9 +515,18 @@ export default function MentorAssignmentPage() {
       if (!sTime) continue;
       const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === mentor);
       if (!entries.length) continue;
-      if (entries.some(entry => overlap(sTime, mTime(entry)) >= minOverlapRequired)) return true;
+      if (hasOverlapOnDay(student, mentor, day)) return true;
     }
     return false;
+  };
+
+  const hasOverlapOnDay = (student, mentor, day) => {
+    const attRanges = normalizeAttendanceRanges(periodAttendance?.[student.id]?.[day]);
+    return (mentorsByDay?.[day] || []).some(entry =>
+      n(entry?.name) === n(mentor) && ranges(mTime(entry)).some(range =>
+        overlapWithAnyRange(attRanges, range.st, range.en) >= minOverlapRequired
+      )
+    );
   };
 
   const buildCandidates = student => {
@@ -513,6 +543,7 @@ export default function MentorAssignmentPage() {
 
     names.forEach(name => {
       if (!name) return;
+      if (name === DIRECTOR_MENTOR_NAME && !isDirectorConsultingPending(student, selectedPeriod)) return;
       if (excluded.has(name)) return;
       workingDays(name, mentorsByDay).forEach(day => {
         const sTime = periodAttendance?.[student.id]?.[day];
@@ -523,7 +554,10 @@ export default function MentorAssignmentPage() {
           entry => !isExtremeIConflict(studentPersonality, entry?.personality)
         );
         if (!compatible.length) return;
-        const ov = compatible.reduce((mx, e) => Math.max(mx, overlap(sTime, mTime(e))), 0);
+        const attRanges = normalizeAttendanceRanges(sTime);
+        const ov = compatible.reduce((mx, e) => Math.max(mx, ...ranges(mTime(e)).map(r =>
+          overlapWithAnyRange(attRanges, r.st, r.en)
+        )), 0);
         if (ov < minOverlapRequired) return; // 1순위 필수
         const gap = prev?.day ? nextWeekGap(prev.day, day) : null;
         const rawPeriodScore = prev?.day ? periodPriority(gap) : 0;
@@ -580,6 +614,20 @@ export default function MentorAssignmentPage() {
   const commitMentor = (student, mentorName, day) => {
     if (!selectedPeriod || !mentorName) return;
     const pickedDay = n(day) || workingDays(mentorName, mentorsByDay)[0] || "";
+    if (!hasOverlapOnDay(student, mentorName, pickedDay)) {
+      setStudents(prev => prev.map(s => {
+        if (s.id !== student.id) return s;
+        const next = clearCurrentMentoring(s);
+        next.mentorHistory[selectedPeriod] = {
+          ...next.mentorHistory[selectedPeriod],
+          assignmentIssue: "시간 미일치 · 수동 지정 후 시간 조정 필요",
+          pendingReassignment: { mentor: mentorName, day: pickedDay },
+        };
+        return next;
+      }));
+      setTimelineViewMode("computed");
+      return false;
+    }
     setStudents(prev =>
       prev.map(s => {
         if (s.id !== student.id) return s;
@@ -608,6 +656,9 @@ export default function MentorAssignmentPage() {
               attended: true,
               missedCarryOver: false,
               missedDay: undefined,
+              fixedNoOverlap: false,
+              assignmentIssue: undefined,
+              pendingReassignment: undefined,
             },
           },
         };
@@ -615,6 +666,7 @@ export default function MentorAssignmentPage() {
     );
     // 수동 선택 직후에는 계산 기준 시간표를 바로 보여준다.
     setTimelineViewMode("computed");
+    return true;
   };
 
   const loadText = nextStudents => {
@@ -653,6 +705,7 @@ export default function MentorAssignmentPage() {
   };
 
   const assignDirectorConsultingStudents = () => {
+    if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
     const targetNames = parseStudentNameList(directorConsultingInput);
     if (!targetNames.length) {
       window.alert("원장컨설팅 대상 학생 이름을 입력해 주세요.");
@@ -669,10 +722,7 @@ export default function MentorAssignmentPage() {
       setStudents(prev =>
         prev.map(s =>
           targetIds.has(s.id)
-            ? {
-                ...s,
-                fixedMentor: DIRECTOR_MENTOR_NAME,
-              }
+            ? setDirectorConsultingStatus(s, selectedPeriod, "pending")
             : s
         )
       );
@@ -681,11 +731,11 @@ export default function MentorAssignmentPage() {
 
     setDirectorConsultingInput("");
     setPopup({
-      title: "원장컨설팅 고정멘토 배정",
+      title: "이번 주 원장컨설팅 대상 지정",
       text: [
         matchedStudents.length
-          ? `배정 완료: ${matchedStudents.map(s => s.name).join(", ")}`
-          : "배정 완료: 없음",
+          ? `대상 지정: ${matchedStudents.map(s => s.name).join(", ")}\n멘토 배정하기를 누르면 원장 컨설팅을 우선 배정합니다.`
+          : "대상 지정: 없음",
         missingNames.length ? `학생 목록에서 찾지 못함: ${missingNames.join(", ")}` : "",
       ]
         .filter(Boolean)
@@ -695,30 +745,19 @@ export default function MentorAssignmentPage() {
 
   const completeDirectorConsulting = studentId => {
     const target = students.find(s => s.id === studentId);
-    if (!target) return;
+    if (!target || !selectedPeriod) return;
 
     setStudents(prev =>
       prev.map(s => {
         if (s.id !== studentId) return s;
 
-        const rec = selectedPeriod ? s?.mentorHistory?.[selectedPeriod] || {} : {};
-        const fixedIsDirector = n(s?.fixedMentor) === DIRECTOR_MENTOR_NAME;
-        const currentIsDirector =
-          n(s?.selectedMentor) === DIRECTOR_MENTOR_NAME ||
-          n(rec?.mentor) === DIRECTOR_MENTOR_NAME ||
-          n(rec?.actualMentor) === DIRECTOR_MENTOR_NAME;
-        const next = fixedIsDirector ? { ...s, fixedMentor: "" } : s;
-
-        return selectedPeriod && currentIsDirector ? clearCurrentMentoring(next) : next;
+        return setDirectorConsultingStatus(s, selectedPeriod, "completed");
       })
-    );
-    setAssignments(prev =>
-      (prev || []).map(a => (a.studentId === studentId ? emptyAssignment(studentId) : a))
     );
     setTimelineViewMode("computed");
     setPopup({
       title: "원장컨설팅 진행 완료",
-      text: `${target.name}: 고정멘토 원장님을 빈칸으로 되돌렸습니다.`,
+      text: `${target.name}: 원장 컨설팅 완료를 기록했습니다. 이번 주 진행 기록은 유지되며, 다음 자동 배정부터 저장된 고정 멘토가 우선 적용됩니다.`,
     });
   };
 
@@ -854,56 +893,36 @@ export default function MentorAssignmentPage() {
 
     const effectiveCandidatesByStudent = {};
     const studentEligibleSlotsById = {};
-    const fixedStudents = assignableStudents.filter(s => Boolean(n(s?.fixedMentor)));
-    const generalStudents = assignableStudents.filter(s => !n(s?.fixedMentor));
-
-    const buildForcedFixedCandidate = (student, mentorName, day) => {
-      const prev = prevRecord(student);
-      const normalizedDay = n(day);
-      return {
-        mentor: mentorName,
-        day: normalizedDay,
-        ov: 0,
-        gap: prev?.day && normalizedDay ? nextWeekGap(prev.day, normalizedDay) : null,
-        pScore: 999,
-        gapRuleMet: false,
-        exp: false,
-        math: false,
-        forcedFixedNoOverlap: true,
-      };
-    };
+    const fixedStudents = assignableStudents
+      .filter(s => Boolean(getPriorityMentor(s, selectedPeriod)))
+      .sort((a, b) => Number(isDirectorConsultingPending(b, selectedPeriod)) - Number(isDirectorConsultingPending(a, selectedPeriod)));
+    const generalStudents = assignableStudents.filter(s => !getPriorityMentor(s, selectedPeriod));
 
     fixedStudents.forEach(s => {
-      const fixedMentor = n(s?.fixedMentor);
+      const fixedMentor = getPriorityMentor(s, selectedPeriod);
       const base = byStudent[s.id] || [];
       const withSlots = prioritizeByPreferredDay(base).filter(
         c => (mentorDaySlots[keyByMentorDay(c.mentor, c.day)] || []).length > 0
       );
       const fixedPool = withSlots.filter(c => c.mentor === fixedMentor);
       const fixedEligibleSlots = buildEligibleSlotRefs(s, fixedPool).filter(
-        item => !reservedSlotKeys.has(item.key)
+        item => !reservedSlotKeys.has(item.key) && hasRemainingCapacity(fixedMentor)
       );
       const fixedChosenEntry = fixedEligibleSlots[0] || null;
-      const fixedForcedDay = fixedChosenEntry?.candidate?.day || resolveFixedMentorDay(s) || "";
-
-      let rankSource = fixedPool;
-      if (!rankSource.length) {
-        const forcedCandidate = buildForcedFixedCandidate(s, fixedMentor, fixedForcedDay);
-        const otherCandidates = withSlots.filter(c => c.mentor !== fixedMentor);
-        rankSource = [forcedCandidate, ...otherCandidates];
-      }
+      const rankSource = [...fixedPool, ...withSlots.filter(c => c.mentor !== fixedMentor)];
 
       if (fixedChosenEntry) {
         reservedSlotKeys.add(fixedChosenEntry.key);
+        consumeCapacity(fixedMentor);
+        loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
       }
-      consumeCapacity(fixedMentor);
-      loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
 
       pick[s.id] = {
         ranks: rankSource.slice(0, 5),
         chosen: fixedChosenEntry?.candidate || null,
-        forcedFixedMentor: fixedMentor,
-        forcedFixedDay: fixedForcedDay,
+        issue: fixedChosenEntry ? "" : !hasAnyOverlapWithMentor(s, fixedMentor)
+          ? `${fixedMentor === DIRECTOR_MENTOR_NAME ? "원장 컨설팅" : `고정 멘토 ${fixedMentor}`} 시간 미일치`
+          : `${fixedMentor} 배정 가능 슬롯 없음 · 정원/배제/성격 조건 확인`,
       };
     });
 
@@ -1054,6 +1073,9 @@ export default function MentorAssignmentPage() {
       pick[s.id] = {
         ranks: rankSource.slice(0, 5),
         chosen,
+        issue: chosen ? "" : !mentorNames.some(name => name !== DIRECTOR_MENTOR_NAME && hasAnyOverlapWithMentor(s, name))
+          ? "일반 컨설팅 · 모든 멘토와 시간 미일치"
+          : "일반 컨설팅 · 배정 가능 슬롯 없음 (정원/배제/성격 조건 확인)",
       };
     });
 
@@ -1061,10 +1083,6 @@ export default function MentorAssignmentPage() {
       students.map(s => {
         if (isMentoringOptOut(s)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
-        const fixedReason = rank =>
-          `고정멘토 우선 배정(시간 미일치)\n선택 멘토: ${rank.mentor || "-"}\n선택 요일: ${
-            rank.day || "미지정"
-          }\n※ 원장 강제 배정 학생 목록에 표시됩니다.`;
         return {
           studentId: s.id,
           first: r[0]?.mentor || "",
@@ -1080,11 +1098,7 @@ export default function MentorAssignmentPage() {
             fifth: r[4]?.day || "",
           },
           reasons: {
-            first: r[0]
-              ? r[0]?.forcedFixedNoOverlap
-                ? fixedReason(r[0])
-                : reasonText(s, r[0])
-              : "후보 없음",
+            first: r[0] ? reasonText(s, r[0]) : "후보 없음",
             second: r[1] ? reasonText(s, r[1]) : "후보 없음",
             third: r[2] ? reasonText(s, r[2]) : "후보 없음",
             fourth: r[3] ? reasonText(s, r[3]) : "후보 없음",
@@ -1098,41 +1112,10 @@ export default function MentorAssignmentPage() {
       prev.map(s => {
         if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
         const chosen = pick[s.id]?.chosen;
-        const forcedFixedMentor = n(pick[s.id]?.forcedFixedMentor);
-        const forcedFixedDay = n(pick[s.id]?.forcedFixedDay);
         if (!chosen) {
-          if (!forcedFixedMentor) return clearCurrentMentoring(s);
-          const old = s?.mentorHistory?.[selectedPeriod] || {};
-          return {
-            ...s,
-            selectedMentor: forcedFixedMentor,
-            selectedMentorDay: forcedFixedDay,
-            initialMentor: s?.initialMentor?.mentor
-              ? s.initialMentor
-              : {
-                  mentor: forcedFixedMentor,
-                  day: forcedFixedDay,
-                  periodId: selectedPeriod,
-                  createdAt: Date.now(),
-                },
-            mentorHistory: {
-              ...(s.mentorHistory || {}),
-              [selectedPeriod]: {
-                ...old,
-                mentor: forcedFixedMentor,
-                actualMentor: forcedFixedMentor,
-                day: forcedFixedDay,
-                slotStart: undefined,
-                slotEnd: undefined,
-                sessionMinutes: minOverlapRequired,
-                attended: true,
-                missedCarryOver: false,
-                missedDay: undefined,
-                autoRank: 1,
-                fixedNoOverlap: true,
-              },
-            },
-          };
+          const next = clearCurrentMentoring(s);
+          next.mentorHistory[selectedPeriod].assignmentIssue = pick[s.id]?.issue || "미배정";
+          return next;
         }
 
         const old = s?.mentorHistory?.[selectedPeriod] || {};
@@ -1158,6 +1141,8 @@ export default function MentorAssignmentPage() {
               missedDay: undefined,
               autoRank: 1,
               fixedNoOverlap: false,
+              assignmentIssue: undefined,
+              pendingReassignment: undefined,
             },
           },
         };
@@ -1165,17 +1150,14 @@ export default function MentorAssignmentPage() {
     );
 
     const missingFromAutoAssign = assignableStudents.filter(
-      s => !pick[s.id]?.chosen && !n(pick[s.id]?.forcedFixedMentor)
+      s => !pick[s.id]?.chosen
     );
     setLastAutoAssignMissingIds(missingFromAutoAssign.map(s => s.id));
     setLastAutoAssignAt(new Date().toISOString());
     setTimelineViewMode("computed");
 
     const slotAssignedCount = Object.values(pick).filter(v => v?.chosen).length;
-    const fixedForcedCount = Object.values(pick).filter(
-      v => !v?.chosen && Boolean(n(v?.forcedFixedMentor))
-    ).length;
-    const done = slotAssignedCount + fixedForcedCount;
+    const done = slotAssignedCount;
     const lines = Object.entries(loads)
       .sort((a, b) => b[1] - a[1])
       .map(([m, c]) => `${m}: ${c}명`)
@@ -1192,7 +1174,7 @@ export default function MentorAssignmentPage() {
         mentorCapacitySummary || "없음"
       }\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
         preferredPriorityDay ? `${preferredPriorityDay}요일` : "없음"
-      }\n배정 방식: 고정멘토 우선 + 슬롯 기반 최대 배정\n(슬롯 배정 ${slotAssignedCount}명 / 고정멘토 강제배정 ${fixedForcedCount}명)\n\n${
+      }\n배정 순서: 원장 컨설팅 → 고정 멘토 → 자동 배정\n(배정 ${slotAssignedCount}명 / 재배정 필요 ${missingFromAutoAssign.length}명)\n\n${
         lines || "배정 없음"
       }`,
     });
@@ -1210,7 +1192,7 @@ export default function MentorAssignmentPage() {
     const mentor = n(row?.[key]);
     const day = n(row?.days?.[key]);
     if (!mentor) return;
-    commitMentor(student, mentor, day);
+    if (!commitMentor(student, mentor, day)) return;
     const next = students.map(s =>
       s.id === student.id
         ? {
@@ -1248,7 +1230,7 @@ export default function MentorAssignmentPage() {
       return;
     }
 
-    const fixed = n(student?.fixedMentor);
+    const fixed = getPriorityMentor(student, selectedPeriod);
     if (!fixed) {
       setPopup({
         title: "고정멘토 적용",
@@ -1258,7 +1240,7 @@ export default function MentorAssignmentPage() {
     }
 
     const day = resolveFixedMentorDay(student);
-    commitMentor(student, fixed, day);
+    if (!commitMentor(student, fixed, day)) return;
     const next = students.map(s =>
       s.id === student.id
         ? {
@@ -1572,10 +1554,26 @@ export default function MentorAssignmentPage() {
   const savedSnapshot = selectedPeriod
     ? mentorAssignmentSnapshots?.[selectedPeriod] || null
     : null;
-  const savedTimelineByDay = useMemo(
-    () => normalizeTimelineByDay(savedSnapshot?.timelineByDay || {}),
-    [savedSnapshot]
-  );
+  const savedTimelineByDay = useMemo(() => {
+    const timeline = normalizeTimelineByDay(savedSnapshot?.timelineByDay || {});
+    // 예전 저장본에 남아 있는 시간 불일치 강제 배정도 원장 목록에서 제외한다.
+    const byId = new Map(students.map(s => [String(s.id), s]));
+    const byName = new Map(students.map(s => [n(s.name), s]));
+    DAYS.forEach(day => Object.entries(timeline[day] || {}).forEach(([mentor, info]) => {
+      info.slots = info.slots.map(slot => {
+        const student = byId.get(String(slot.studentId)) || byName.get(n(slot.studentName));
+        return student && !activeMentor(student)
+          ? { ...slot, studentId: null, studentName: "", studentAttendanceLabel: "" } : slot;
+      });
+      info.unassigned = info.unassigned.filter(name => {
+        const student = byName.get(n(name));
+        return !student || activeMentor(student) === mentor;
+      });
+      info.assignedCount = info.slots.filter(slot => slot.studentId != null).length;
+      info.requestCount = info.assignedCount + info.unassigned.length;
+    }));
+    return timeline;
+  }, [savedSnapshot, students, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
   const hasSavedSnapshot = Boolean(savedSnapshot?.timelineByDay);
   const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed";
   const displayTimelineByDay = showingSavedSnapshot
@@ -1719,45 +1717,60 @@ export default function MentorAssignmentPage() {
   const autoAssignMissingStudents = useMemo(() => {
     const idSet = new Set((lastAutoAssignMissingIds || []).map(v => String(v)));
     return students
-      .filter(s => idSet.has(String(s.id)) && !isMentoringOptOut(s))
+      .filter(s => idSet.has(String(s.id)) && !isMentoringOptOut(s) && !activeMentor(s))
       .map(s => ({ id: s.id, name: s.name }))
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
-  }, [students, lastAutoAssignMissingIds]);
+  }, [students, lastAutoAssignMissingIds, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
 
-  const directorForcedAssignedStudents = useMemo(
+  const directorConsultingStudents = useMemo(
     () =>
       students
         .filter(s => {
           if (isMentoringOptOut(s)) return false;
           const rec = s?.mentorHistory?.[selectedPeriod] || {};
-          const fixedMentor = n(s?.fixedMentor);
-          const currentMentor =
-            n(s?.selectedMentor) || n(rec?.actualMentor) || n(rec?.mentor);
-          return (
-            fixedMentor === DIRECTOR_MENTOR_NAME ||
-            currentMentor === DIRECTOR_MENTOR_NAME ||
-            rec?.fixedNoOverlap === true
+          return activeMentor(s) === DIRECTOR_MENTOR_NAME || (
+            isDirectorConsultingPending(s, selectedPeriod) && !activeMentor(s) &&
+            hasAnyOverlapWithMentor(s, DIRECTOR_MENTOR_NAME) && !rec.assignmentIssue && !rec.fixedNoOverlap
           );
         })
         .map(s => {
-          const rec = s?.mentorHistory?.[selectedPeriod] || {};
-          const fixedMentor = n(s?.fixedMentor);
-          const currentMentor =
-            n(s?.selectedMentor) || n(rec?.actualMentor) || n(rec?.mentor);
           return {
             id: s.id,
             name: s.name,
-            fixedMentor,
-            currentMentor,
-            isDirectorConsulting:
-              fixedMentor === DIRECTOR_MENTOR_NAME ||
-              currentMentor === DIRECTOR_MENTOR_NAME,
-            isFixedNoOverlap: rec?.fixedNoOverlap === true,
+            assigned: activeMentor(s) === DIRECTOR_MENTOR_NAME,
+            completed: s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed",
           };
         })
         .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
-    [students, selectedPeriod]
+    [students, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]
   );
+
+  const reassignmentStudents = selectedPeriod ? students.filter(s =>
+    !isMentoringOptOut(s) && !activeMentor(s)
+  ).map(student => {
+    const rec = student.mentorHistory?.[selectedPeriod] || {};
+    const priority = getPriorityMentor(student, selectedPeriod);
+    const previous = n(rec.actualMentor) || n(rec.mentor);
+    const reason = rec.assignmentIssue || (
+      priority && !hasAnyOverlapWithMentor(student, priority) ? `${priority} 시간 미일치` :
+      previous ? `${previous} 시간 미일치` :
+      !mentorNames.some(name => name !== DIRECTOR_MENTOR_NAME && hasAnyOverlapWithMentor(student, name))
+        ? "일반 컨설팅 · 모든 멘토와 시간 미일치" : "자동 배정 대기"
+    );
+    return { student, reason, pending: rec.pendingReassignment };
+  }) : [];
+
+  const applyReassignment = student => {
+    const draft = reassignmentDrafts[student.id] || student.mentorHistory?.[selectedPeriod]?.pendingReassignment || {};
+    if (!draft.mentor || !draft.day) return;
+    const assigned = commitMentor(student, draft.mentor, draft.day);
+    setPopup({
+      title: assigned ? "대체 멘토 배정 완료" : "대체 멘토 지정 · 시간 조정 필요",
+      text: assigned
+        ? `${student.name} → ${draft.mentor} (${draft.day})\n저장된 고정 멘토는 유지됩니다.`
+        : `${student.name} → ${draft.mentor} (${draft.day}) 희망 배정을 저장했습니다.\n학생 출결 또는 멘토 근무 시간을 조정한 뒤 다시 적용해 주세요. 시간 조정 전에는 배정 인원에 포함되지 않습니다.`,
+    });
+  };
 
   const downloadMentorMatchingInfo = () => {
     if (!selectedPeriod) {
@@ -1773,6 +1786,11 @@ export default function MentorAssignmentPage() {
         studentId: student.id,
         studentName: student.name,
         mentoringOptOut: isMentoringOptOut(student),
+        persistentFixedMentor: n(student.persistentFixedMentor),
+        fixedMentor: n(student.fixedMentor),
+        directorConsulting: student.directorConsultingByPeriod?.[selectedPeriod] || null,
+        assignmentIssue: n(rec.assignmentIssue),
+        pendingReassignment: rec.pendingReassignment || null,
         mentor: mentor || "",
         day: day || "",
         slotStart: n(rec.slotStart),
@@ -1969,6 +1987,11 @@ export default function MentorAssignmentPage() {
           const old = student?.mentorHistory?.[periodId] || {};
           return {
             ...student,
+            ...(Object.hasOwn(row, "persistentFixedMentor") ? { persistentFixedMentor: n(row.persistentFixedMentor) } : {}),
+            ...(Object.hasOwn(row, "fixedMentor") ? { fixedMentor: n(row.fixedMentor) } : {}),
+            ...(Object.hasOwn(row, "directorConsulting") ? {
+              directorConsultingByPeriod: { ...(student.directorConsultingByPeriod || {}), [periodId]: row.directorConsulting },
+            } : {}),
             mentoringOptOut: row?.mentoringOptOut === true,
             selectedMentor: mentor,
             selectedMentorDay: day,
@@ -1978,6 +2001,9 @@ export default function MentorAssignmentPage() {
                 ...old,
                 mentor,
                 actualMentor: mentor,
+                fixedNoOverlap: false,
+                assignmentIssue: n(row.assignmentIssue) || undefined,
+                pendingReassignment: row.pendingReassignment || undefined,
                 day,
                 slotStart: n(row?.slotStart),
                 slotEnd: n(row?.slotEnd),
@@ -2067,7 +2093,7 @@ export default function MentorAssignmentPage() {
         map[student.id] = false;
         return;
       }
-      const fixed = n(student?.fixedMentor);
+      const fixed = getPriorityMentor(student, selectedPeriod);
       if (!fixed) {
         map[student.id] = false;
         return;
@@ -2087,7 +2113,7 @@ export default function MentorAssignmentPage() {
       map[student.id] = !currentHasOverlap;
     });
     return map;
-  }, [students, periodAttendance, mentorsByDay, selectedPeriod]);
+  }, [students, periodAttendance, mentorsByDay, selectedPeriod, minOverlapRequired]);
 
   const missedMentoringRows = useMemo(
     () =>
@@ -2291,7 +2317,7 @@ export default function MentorAssignmentPage() {
         <span className="text-xs text-gray-600">
           요일/시간 배정 최소 겹침: {minOverlapRequired}분
         </span>
-        <button onClick={autoAssign} className="bg-blue-600 text-white px-4 py-2 rounded">
+        <button onClick={() => autoAssign()} className="bg-blue-600 text-white px-4 py-2 rounded">
           멘토 배정하기(리셋)
         </button>
         <button
@@ -2371,6 +2397,77 @@ export default function MentorAssignmentPage() {
           </button>
         ))}
       </div>
+
+      <section className="border rounded p-4 bg-emerald-50" aria-label="학생별 고정 멘토 설정">
+        <h2 className="text-lg font-semibold">학생별 고정 멘토 설정 (매주 유지)</h2>
+        <p className="text-sm text-gray-600 mt-1 mb-3">
+          배정 순서: 이번 주 원장 컨설팅 → 고정 멘토 → 기존 자동 배정.
+          원장 컨설팅을 지정해도 아래 고정 멘토는 유지되며, 다음 주에는 고정 멘토로 돌아갑니다.
+          설정 후 멘토 배정하기를 눌러 적용하세요.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+          {students.map(student => (
+            <label key={`persistent-${student.id}`} className="flex items-center justify-between gap-2 border rounded bg-white p-2 text-sm">
+              <span>{student.name}{isMentoringOptOut(student) ? " (미희망)" : ""}</span>
+              <select
+                aria-label={`${student.name} 매주 고정 멘토`}
+                className="border rounded p-1 max-w-[180px]"
+                value={student.persistentFixedMentor || ""}
+                onChange={e => {
+                  const value = e.target.value;
+                  setStudents(prev => prev.map(s => s.id === student.id ? { ...s, persistentFixedMentor: value } : s));
+                }}
+              >
+                <option value="">설정 안 함</option>
+                {Array.from(new Set([...mentorNames, n(student.persistentFixedMentor)])).filter(name => name && name !== DIRECTOR_MENTOR_NAME).map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 mt-2">설정 안 함을 선택하면 기존 고정멘토 값이 있을 경우 해당 값을 사용합니다.</p>
+      </section>
+
+      <section className="border rounded p-4 bg-rose-50" aria-label="시간 불일치 및 미배정 학생">
+        <h2 className="text-lg font-semibold">시간 불일치 / 미배정 · 대체 멘토 지정</h2>
+        <p className="text-sm text-gray-600 my-2">
+          시간이 맞지 않는 학생은 원장 배정 인원에 포함되지 않습니다. 다른 멘토와 요일을 지정할 수 있으며,
+          시간이 맞지 않으면 희망 배정으로 저장됩니다. 시간표 조정 후 다시 적용해 주세요.
+        </p>
+        {!reassignmentStudents.length ? <p className="text-sm text-gray-500">해당 학생 없음</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left border-collapse">
+              <thead><tr><th className="p-2">학생</th><th className="p-2">사유</th><th className="p-2">대체 멘토 / 요일</th><th className="p-2">적용</th></tr></thead>
+              <tbody>{reassignmentStudents.map(({ student, reason, pending }) => {
+                const draft = reassignmentDrafts[student.id] || pending || {};
+                return (
+                  <tr key={student.id} className="border-t border-rose-200">
+                    <td className="p-2 font-medium">{student.name}</td>
+                    <td className="p-2 text-rose-800">{reason}{pending ? <div className="text-xs">희망 배정: {pending.mentor} ({pending.day})</div> : null}</td>
+                    <td className="p-2">
+                      <div className="flex gap-2">
+                        <select aria-label={`${student.name} 대체 멘토`} className="border rounded p-1" value={draft.mentor || ""}
+                          onChange={e => { const mentor = e.target.value; setReassignmentDrafts(prev => ({ ...prev, [student.id]: { ...draft, mentor, day: "" } })); }}>
+                          <option value="">멘토 선택</option>
+                          {mentorNames.map(name => <option key={name} value={name}>{name}{hasAnyOverlapWithMentor(student, name) ? " (시간 일치)" : " (시간 조정 필요)"}</option>)}
+                        </select>
+                        <select aria-label={`${student.name} 대체 요일`} className="border rounded p-1" value={draft.day || ""}
+                          onChange={e => { const day = e.target.value; setReassignmentDrafts(prev => ({ ...prev, [student.id]: { ...draft, day } })); }}>
+                          <option value="">요일 선택</option>
+                          {DAYS.map(day => <option key={day} value={day}>{day}{draft.mentor && hasOverlapOnDay(student, draft.mentor, day) ? " (시간 일치)" : ""}</option>)}
+                        </select>
+                      </div>
+                    </td>
+                    <td className="p-2"><button type="button" className="bg-blue-600 text-white rounded px-3 py-1 disabled:opacity-40"
+                      disabled={!draft.mentor || !draft.day} onClick={() => applyReassignment(student)}>적용</button></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <div className="overflow-x-auto overflow-y-auto max-h-[760px] border rounded">
         <table className="w-full border-collapse text-center">
@@ -2469,7 +2566,7 @@ export default function MentorAssignmentPage() {
           <thead className="bg-gray-100">
             <tr>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">이름</th>
-              <th className="border p-2 sticky top-0 bg-gray-100 z-20">고정멘토</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">기존 고정멘토</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">멘토 배제</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 멘토</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 요일</th>
@@ -2498,17 +2595,21 @@ export default function MentorAssignmentPage() {
                       <input
                         className="border rounded px-2 py-1 w-28"
                         value={s.fixedMentor || ""}
-                        onChange={e =>
-                          setStudents(prev =>
-                            prev.map(x => (x.id === s.id ? { ...x, fixedMentor: e.target.value } : x))
-                          )
-                        }
+                        onChange={e => {
+                          const value = e.target.value;
+                          setStudents(prev => prev.map(x => {
+                            if (x.id !== s.id) return x;
+                            return n(value) === DIRECTOR_MENTOR_NAME && selectedPeriod
+                              ? setDirectorConsultingStatus(x, selectedPeriod, "pending")
+                              : { ...x, fixedMentor: value };
+                          }));
+                        }}
                       />
                       <button
                         type="button"
                         className="bg-blue-600 text-white text-xs px-2 py-1 rounded disabled:opacity-40"
                         onClick={() => applyFixedMentorToSelection(s)}
-                        disabled={!n(s.fixedMentor) || !selectedPeriod || isMentoringOptOut(s)}
+                        disabled={!getPriorityMentor(s, selectedPeriod) || !selectedPeriod || isMentoringOptOut(s)}
                       >
                         적용
                       </button>
@@ -2586,7 +2687,7 @@ export default function MentorAssignmentPage() {
           )}
         </div>
         <div className="border rounded p-3 bg-indigo-50 shadow-sm">
-          <h2 className="text-lg font-semibold mb-2">원장 강제 배정 학생</h2>
+          <h2 className="text-lg font-semibold mb-2">이번 주 원장 컨설팅</h2>
           <div className="mb-3 space-y-2">
             <label className="block text-sm font-medium text-indigo-950">
               이번주 원장컨설팅 대상
@@ -2601,27 +2702,28 @@ export default function MentorAssignmentPage() {
               type="button"
               className="rounded bg-indigo-600 px-3 py-1 text-sm font-semibold text-white disabled:opacity-40"
               onClick={assignDirectorConsultingStudents}
-              disabled={!n(directorConsultingInput)}
+              disabled={!n(directorConsultingInput) || !selectedPeriod}
             >
-              배정
+              대상 지정
             </button>
           </div>
-          {directorForcedAssignedStudents.length === 0 ? (
+          {directorConsultingStudents.length === 0 ? (
             <div className="text-sm text-gray-500">기록 없음</div>
           ) : (
             <div className="space-y-1">
-              <div className="text-sm text-gray-600">총 {directorForcedAssignedStudents.length}명</div>
+              <div className="text-sm text-gray-600">총 {directorConsultingStudents.length}명 (시간 불일치는 별도 목록)</div>
               <div className="flex flex-wrap gap-2">
-                {directorForcedAssignedStudents.map(student => (
+                {directorConsultingStudents.map(student => (
                   <label
                     key={`director-forced-${student.id}`}
                     className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-sm font-semibold text-indigo-950"
                   >
-                    {student.isDirectorConsulting ? (
+                    {student.assigned ? (
                       <input
                         type="checkbox"
                         className="h-3.5 w-3.5"
-                        checked={false}
+                        checked={student.completed}
+                        disabled={student.completed}
                         onChange={e => {
                           if (e.target.checked) completeDirectorConsulting(student.id);
                         }}
@@ -2629,11 +2731,7 @@ export default function MentorAssignmentPage() {
                       />
                     ) : null}
                     <span>{student.name}</span>
-                    {student.isDirectorConsulting ? (
-                      <span className="text-[11px] text-indigo-700">원장님</span>
-                    ) : student.isFixedNoOverlap ? (
-                      <span className="text-[11px] text-indigo-700">시간 미일치</span>
-                    ) : null}
+                    <span className="text-[11px] text-indigo-700">{student.completed ? "진행 완료" : student.assigned ? "원장님 배정" : "배정 대기"}</span>
                   </label>
                 ))}
               </div>
