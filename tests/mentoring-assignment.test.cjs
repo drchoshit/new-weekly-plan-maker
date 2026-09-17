@@ -92,6 +92,7 @@ test("원장 지정과 완료가 영구 고정 멘토/기존 고정 멘토를 �
   setup([student(1, { fixedMentor: "기존멘토" })]);
   nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: 1 });
   select("학생1 매주 고정 멘토", "멘토A");
+  button("확인").props.onClick();
   nodes(render()).find(node => node.type === "textarea").props.onChange({ target: { value: "학생1" } });
   button("대상 지정").props.onClick();
   assert.equal(current.students[0].fixedMentor, "기존멘토");
@@ -263,4 +264,29 @@ test("근무 요일이 삭제된 대체 멘토는 임의의 요일로 배정하�
   assert.equal(button("적용", panel).props.disabled, true);
   button("적용", panel).props.onClick();
   assert.equal(rec(1).mentor, undefined);
+});
+
+test("고정 멘토는 확인할 때만 저장되며 목록에는 저장된 학생과 멘토만 표시한다", () => {
+  setup([student(1), student(2, { persistentFixedMentor: "멘토A" })]);
+  const chooseStudent = id => nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: id });
+  const savedList = () => nodes(render()).find(node => node.props["aria-label"] === "저장된 고정 멘토 목록");
+  assert.match(text(savedList()), /학생2멘토A/);
+  chooseStudent(1);
+  select("학생1 매주 고정 멘토", "멘토A");
+  assert.equal(current.students[0].persistentFixedMentor, undefined);
+  assert.ok(!text(savedList()).includes("학생1"));
+  // 학생을 바꾸면 확인하지 않은 선택이 다른 학생에게 저장되지 않는다.
+  chooseStudent(2);
+  chooseStudent(1);
+  assert.equal(nodes(render()).find(node => node.props["aria-label"] === "학생1 매주 고정 멘토").props.value, "");
+  select("학생1 매주 고정 멘토", "멘토A");
+  button("확인").props.onClick();
+  assert.equal(current.students[0].persistentFixedMentor, "멘토A");
+  assert.match(text(savedList()), /학생1멘토A/);
+  select("학생1 매주 고정 멘토", "");
+  assert.match(text(savedList()), /학생1멘토A/);
+  button("확인").props.onClick();
+  assert.equal(current.students[0].persistentFixedMentor, "");
+  assert.ok(!text(savedList()).includes("학생1"));
+  assert.match(text(savedList()), /학생2멘토A/);
 });

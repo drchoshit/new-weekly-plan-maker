@@ -354,7 +354,26 @@ export default function MentorAssignmentPage() {
   const [directorConsultingInput, setDirectorConsultingInput] = useState("");
   const [reassignmentDrafts, setReassignmentDrafts] = useState({});
   const [fixedMentorStudentId, setFixedMentorStudentId] = useState(null);
+  const [fixedMentorDraft, setFixedMentorDraft] = useState(null);
+  const [fixedMentorSaveMessage, setFixedMentorSaveMessage] = useState("");
   const fixedMentorStudent = students.find(s => s.id === fixedMentorStudentId);
+  const savedFixedMentorStudents = students
+    .filter(s => n(s.persistentFixedMentor))
+    .sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
+  const selectFixedMentorStudent = option => {
+    setFixedMentorStudentId(option?.value ?? null);
+    setFixedMentorDraft(null);
+    setFixedMentorSaveMessage("");
+  };
+  const saveFixedMentor = () => {
+    if (!fixedMentorStudent) return;
+    const mentor = n(fixedMentorDraft ?? fixedMentorStudent.persistentFixedMentor);
+    setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: mentor } : s));
+    setFixedMentorDraft(null);
+    setFixedMentorSaveMessage(mentor
+      ? `${fixedMentorStudent.name} → ${mentor} 저장했습니다.`
+      : `${fixedMentorStudent.name}의 매주 고정 멘토 설정을 해제했습니다.`);
+  };
   const fixedMentorStudentOptions = students.map(s => ({
     value: s.id,
     label: `${s.name}${isNaN(Number(s.birthYear)) || !s.birthYear ? "" : ` (${s.birthYear})`}${s.mentoringOptOut ? " · 미희망" : ""}${n(s.persistentFixedMentor) ? ` · ${n(s.persistentFixedMentor)}` : ""}`,
@@ -2424,7 +2443,7 @@ export default function MentorAssignmentPage() {
               placeholder="학생 이름 검색..."
               options={fixedMentorStudentOptions}
               value={fixedMentorStudentOptions.find(option => option.value === fixedMentorStudentId) || null}
-              onChange={option => setFixedMentorStudentId(option?.value ?? null)}
+              onChange={selectFixedMentorStudent}
               isSearchable
               isClearable
               maxMenuHeight={200}
@@ -2438,10 +2457,10 @@ export default function MentorAssignmentPage() {
               <select
                 aria-label={`${fixedMentorStudent.name} 매주 고정 멘토`}
                 className="border rounded p-1 max-w-[180px]"
-                value={fixedMentorStudent.persistentFixedMentor || ""}
+                value={fixedMentorDraft ?? fixedMentorStudent.persistentFixedMentor ?? ""}
                 onChange={e => {
-                  const value = e.target.value;
-                  setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: value } : s));
+                  setFixedMentorDraft(e.target.value);
+                  setFixedMentorSaveMessage("");
                 }}
               >
                 <option value="">설정 안 함</option>
@@ -2451,8 +2470,31 @@ export default function MentorAssignmentPage() {
               </select>
             </label>
           ) : null}
+          <button type="button" onClick={saveFixedMentor} disabled={!fixedMentorStudent}
+            className="rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+            확인
+          </button>
         </div>
-        <p className="text-xs text-gray-500 mt-2">설정 후 멘토 배정하기를 눌러 적용하세요. 설정 안 함은 기존 고정멘토 값을 사용합니다.</p>
+        {fixedMentorSaveMessage ? <p role="status" className="mt-2 text-sm text-emerald-800">{fixedMentorSaveMessage}</p> : null}
+        <p className="text-xs text-gray-500 mt-2">멘토 선택 후 확인을 눌러 저장하세요. 주간 배정에는 멘토 배정하기로 적용됩니다. 설정 안 함은 기존 고정멘토 값을 사용합니다.</p>
+        <div className="mt-3 border-t border-emerald-200 pt-3" aria-label="저장된 고정 멘토 목록">
+          <h3 className="text-sm font-semibold mb-2">고정 멘토 설정 학생 · {savedFixedMentorStudents.length}명</h3>
+          {savedFixedMentorStudents.length ? (
+            <div className="max-h-56 overflow-y-auto rounded border border-emerald-200 bg-white">
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-emerald-100"><tr>
+                  <th className="px-3 py-2">학생</th><th className="px-3 py-2">담당 멘토</th>
+                </tr></thead>
+                <tbody>{savedFixedMentorStudents.map(student => (
+                  <tr key={student.id} className="border-t border-emerald-100">
+                    <td className="px-3 py-2">{student.name}{student.mentoringOptOut ? " (미희망)" : ""}</td>
+                    <td className="px-3 py-2">{student.persistentFixedMentor}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          ) : <p className="text-sm text-gray-500">저장된 고정 멘토가 없습니다.</p>}
+        </div>
       </section>
 
       <section className="border rounded p-4 bg-rose-50" aria-label="시간 불일치 및 미배정 학생">
