@@ -2,7 +2,7 @@
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
-import { DIRECTOR_MENTOR_NAME, getPriorityMentor, isDirectorConsultingPending, setDirectorConsultingStatus } from "../utils/mentoringPriority.mjs";
+import { DIRECTOR_MENTOR_NAME, getPriorityMentor, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
@@ -394,11 +394,12 @@ export default function MentorAssignmentPage() {
 
   useEffect(() => {
     if (!selectedPeriod) return;
-    if (!students.some(s => !s.directorConsultingByPeriod && n(s.fixedMentor) === DIRECTOR_MENTOR_NAME)) return;
-    setStudents(prev => prev.map(s =>
-      !s.directorConsultingByPeriod && n(s.fixedMentor) === DIRECTOR_MENTOR_NAME
-        ? setDirectorConsultingStatus(s, selectedPeriod, "pending") : s
-    ));
+    const normalize = s => !isDirectorConsultingPending(s, selectedPeriod) ? s :
+      !s.directorConsultingByPeriod ? setDirectorConsultingStatus(s, selectedPeriod, "pending") :
+      assignDirectorConsulting(s, selectedPeriod);
+    if (students.some(s => normalize(s) !== s)) {
+      setStudents(prev => prev.map(normalize));
+    }
   }, [students, selectedPeriod, setStudents]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
@@ -408,14 +409,14 @@ export default function MentorAssignmentPage() {
   }, [pList, selectedPeriod]);
   const profiles = useMemo(() => mentorProfiles(mentorsByDay), [mentorsByDay]);
   const mentorNames = useMemo(
-    () => Array.from(profiles.keys()).sort((a, b) => a.localeCompare(b, "ko")),
+    () => Array.from(profiles.keys()).filter(name => name !== DIRECTOR_MENTOR_NAME).sort((a, b) => a.localeCompare(b, "ko")),
     [profiles]
   );
   const mentorCapacityMentorNames = useMemo(() => {
     const names = new Set(mentorNames);
     students.forEach(student => {
       const fixedMentor = n(student?.fixedMentor);
-      if (fixedMentor) names.add(fixedMentor);
+      if (fixedMentor && fixedMentor !== DIRECTOR_MENTOR_NAME) names.add(fixedMentor);
       if (n(student?.persistentFixedMentor)) names.add(n(student.persistentFixedMentor));
     });
     return Array.from(names).sort((a, b) => String(a || "").localeCompare(String(b || ""), "ko"));
@@ -501,9 +502,11 @@ export default function MentorAssignmentPage() {
     return r?.mentor ? { mentor: n(r.mentor), day: n(r.day) || null } : null;
   };
   const activeMentor = student => {
+    if (isDirectorConsultingPending(student, selectedPeriod)) return DIRECTOR_MENTOR_NAME;
     if (isMentoringOptOut(student)) return "";
     const rec = student?.mentorHistory?.[selectedPeriod] || {};
     const mentor = n(rec.actualMentor) || n(rec.mentor);
+    if (mentor === DIRECTOR_MENTOR_NAME) return mentor;
     // 이전 강제 배정 기록도 시간표와 실제 배정 인원에서 제외한다.
     const fits = DAY_SET.has(n(rec.day))
       ? hasOverlapOnDay(student, mentor, rec.day)
@@ -555,7 +558,7 @@ export default function MentorAssignmentPage() {
   };
 
   const buildCandidates = student => {
-    if (isMentoringOptOut(student)) return [];
+    if (isMentoringOptOut(student) || isDirectorConsultingPending(student, selectedPeriod)) return [];
     const excluded = new Set(
       [student?.bannedMentor1, student?.bannedMentor2]
         .filter(Boolean)
@@ -638,6 +641,11 @@ export default function MentorAssignmentPage() {
 
   const commitMentor = (student, mentorName, day) => {
     if (!selectedPeriod || !mentorName) return;
+    if (mentorName === DIRECTOR_MENTOR_NAME) {
+      setStudents(prev => prev.map(s => s.id === student.id ? setDirectorConsultingStatus(s, selectedPeriod, "pending") : s));
+      setTimelineViewMode("computed");
+      return true;
+    }
     const pickedDay = n(day) || workingDays(mentorName, mentorsByDay)[0] || "";
     if (!hasOverlapOnDay(student, mentorName, pickedDay)) {
       setStudents(prev => prev.map(s => {
@@ -759,7 +767,7 @@ export default function MentorAssignmentPage() {
       title: "이번 주 원장컨설팅 대상 지정",
       text: [
         matchedStudents.length
-          ? `대상 지정: ${matchedStudents.map(s => s.name).join(", ")}\n멘토 배정하기를 누르면 원장 컨설팅을 우선 배정합니다.`
+          ? `지정 완료: ${matchedStudents.map(s => s.name).join(", ")}\n원장 컨설팅은 시간 배정 없이 목록 등록만으로 지정이 완료됩니다.`
           : "대상 지정: 없음",
         missingNames.length ? `학생 목록에서 찾지 못함: ${missingNames.join(", ")}` : "",
       ]
@@ -789,7 +797,8 @@ export default function MentorAssignmentPage() {
   const autoAssign = (preferredDayRaw = "") => {
     if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
     const preferredPriorityDay = n(preferredDayRaw);
-    const assignableStudents = students.filter(s => !isMentoringOptOut(s));
+    const directorStudents = students.filter(s => isDirectorConsultingPending(s, selectedPeriod));
+    const assignableStudents = students.filter(s => !isMentoringOptOut(s) && !isDirectorConsultingPending(s, selectedPeriod));
     const byStudent = {};
     assignableStudents.forEach(s => {
       byStudent[s.id] = buildCandidates(s);
@@ -803,7 +812,7 @@ export default function MentorAssignmentPage() {
     DAYS.forEach(day => {
       (mentorsByDay?.[day] || []).forEach(entry => {
         const mentor = n(entry?.name);
-        if (!mentor) return;
+        if (!mentor || mentor === DIRECTOR_MENTOR_NAME) return;
         const mdKey = keyByMentorDay(mentor, day);
         if (!mentorDaySlots[mdKey]) mentorDaySlots[mdKey] = [];
         mentorDaySlots[mdKey].push(
@@ -919,8 +928,7 @@ export default function MentorAssignmentPage() {
     const effectiveCandidatesByStudent = {};
     const studentEligibleSlotsById = {};
     const fixedStudents = assignableStudents
-      .filter(s => Boolean(getPriorityMentor(s, selectedPeriod)))
-      .sort((a, b) => Number(isDirectorConsultingPending(b, selectedPeriod)) - Number(isDirectorConsultingPending(a, selectedPeriod)));
+      .filter(s => Boolean(getPriorityMentor(s, selectedPeriod)));
     const generalStudents = assignableStudents.filter(s => !getPriorityMentor(s, selectedPeriod));
 
     fixedStudents.forEach(s => {
@@ -940,6 +948,9 @@ export default function MentorAssignmentPage() {
         reservedSlotKeys.add(fixedChosenEntry.key);
         consumeCapacity(fixedMentor);
         loads[fixedMentor] = (loads[fixedMentor] || 0) + 1;
+      } else {
+        // 고정 멘토가 불가능하면 시간에 맞는 다른 멘토의 자동 배정으로 넘어간다.
+        generalStudents.push(s);
       }
 
       pick[s.id] = {
@@ -1106,7 +1117,7 @@ export default function MentorAssignmentPage() {
 
     setAssignments(
       students.map(s => {
-        if (isMentoringOptOut(s)) return emptyAssignment(s.id);
+        if (isMentoringOptOut(s) || isDirectorConsultingPending(s, selectedPeriod)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
         return {
           studentId: s.id,
@@ -1135,6 +1146,7 @@ export default function MentorAssignmentPage() {
 
     setStudents(prev =>
       prev.map(s => {
+        if (isDirectorConsultingPending(s, selectedPeriod)) return assignDirectorConsulting(s, selectedPeriod);
         if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
         const chosen = pick[s.id]?.chosen;
         if (!chosen) {
@@ -1193,8 +1205,8 @@ export default function MentorAssignmentPage() {
       .join(", ");
     setPopup({
       title: "자동 배정 완료",
-      text: `기준 주차: ${selectedPeriod}\n배정 성공: ${done} / ${assignableStudents.length}\n제외 인원: ${
-        students.length - assignableStudents.length
+      text: `기준 주차: ${selectedPeriod}\n원장 컨설팅 지정: ${directorStudents.length}명 (시간 배정 없음)\n일반 멘토 배정 성공: ${done} / ${assignableStudents.length}\n미희망 제외 인원: ${
+        students.length - assignableStudents.length - directorStudents.length
       }명\n최대 인원(기본): ${maxPerMentor}명\n멘토별 최대 인원: ${
         mentorCapacitySummary || "없음"
       }\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
@@ -1291,6 +1303,10 @@ export default function MentorAssignmentPage() {
   };
 
   const verify = student => {
+    if (activeMentor(student) === DIRECTOR_MENTOR_NAME) {
+      setPopup({ title: `검증 결과 - ${student.name}`, text: "원장 컨설팅 지정 완료: 원장은 상시 가능하므로 시간·요일·정원 검사를 하지 않습니다." });
+      return;
+    }
     if (isMentoringOptOut(student)) {
       setPopup({
         title: `검증 결과 - ${student.name}`,
@@ -1338,6 +1354,7 @@ export default function MentorAssignmentPage() {
   const mentorCell = (mentor, day = "") => {
     const name = n(mentor);
     if (!name) return <span className="text-gray-300">-</span>;
+    if (name === DIRECTOR_MENTOR_NAME) return <div><div className="font-semibold">원장님</div><div className="text-xs text-gray-500">컨설팅 지정 완료 · 시간 배정 없음</div></div>;
     const days = day ? [day] : workingDays(name, mentorsByDay);
     return (
       <div>
@@ -1378,7 +1395,7 @@ export default function MentorAssignmentPage() {
     students.forEach(student => {
       if (isMentoringOptOut(student)) return;
       const mentor = activeMentor(student);
-      if (!mentor) return;
+      if (!mentor || mentor === DIRECTOR_MENTOR_NAME) return;
       const day = resolveAssignedDay(student, mentor);
       if (!DAY_SET.has(day)) return;
       if (!studentsByMentorDay[day][mentor]) studentsByMentorDay[day][mentor] = [];
@@ -1423,7 +1440,7 @@ export default function MentorAssignmentPage() {
     DAYS.forEach(day => {
       (mentorsByDay?.[day] || []).forEach(entry => {
         const mentor = n(entry?.name);
-        if (!mentor) return;
+        if (!mentor || mentor === DIRECTOR_MENTOR_NAME) return;
         if (!mentorSlotsByDay[day][mentor]) mentorSlotsByDay[day][mentor] = [];
 
         const sessionMinutes =
@@ -1585,9 +1602,13 @@ export default function MentorAssignmentPage() {
     const byId = new Map(students.map(s => [String(s.id), s]));
     const byName = new Map(students.map(s => [n(s.name), s]));
     DAYS.forEach(day => Object.entries(timeline[day] || {}).forEach(([mentor, info]) => {
+      if (mentor === DIRECTOR_MENTOR_NAME) {
+        delete timeline[day][mentor];
+        return;
+      }
       info.slots = info.slots.map(slot => {
         const student = byId.get(String(slot.studentId)) || byName.get(n(slot.studentName));
-        return student && !activeMentor(student)
+        return student && (!activeMentor(student) || activeMentor(student) === DIRECTOR_MENTOR_NAME)
           ? { ...slot, studentId: null, studentName: "", studentAttendanceLabel: "" } : slot;
       });
       info.unassigned = info.unassigned.filter(name => {
@@ -1747,39 +1768,14 @@ export default function MentorAssignmentPage() {
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
   }, [students, lastAutoAssignMissingIds, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
 
-  // 대상 지정은 실제 배정과 별개다. 시간 불일치/기존 멘토가 있어도 지정 사실을 보여준다.
+  // 원장 컨설팅은 목록 등록으로 지정 완료되며 일반 멘토 시간표와 별도로 관리한다.
   const directorConsultingTargets = students.filter(s =>
     isDirectorConsultingPending(s, selectedPeriod) ||
     s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed"
   ).map(s => {
-    const currentMentor = activeMentor(s);
     const completed = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed";
-    const status = isMentoringOptOut(s) ? "미희망 · 배정 제외" :
-      completed ? "진행 완료" :
-      currentMentor === DIRECTOR_MENTOR_NAME ? "원장님 배정" :
-      !hasAnyOverlapWithMentor(s, DIRECTOR_MENTOR_NAME) ? "시간 불일치 · 재배정 필요" :
-      currentMentor ? `대상 지정 · 현재 ${currentMentor}` : "대상 지정 · 배정 대기";
-    return { id: s.id, name: s.name, status };
+    return { id: s.id, name: s.name, completed, status: completed ? "진행 완료" : "지정 완료" };
   }).sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
-
-  const directorConsultingStudents = useMemo(
-    () =>
-      students
-        .filter(s => {
-          if (isMentoringOptOut(s)) return false;
-          return activeMentor(s) === DIRECTOR_MENTOR_NAME;
-        })
-        .map(s => {
-          return {
-            id: s.id,
-            name: s.name,
-            assigned: activeMentor(s) === DIRECTOR_MENTOR_NAME,
-            completed: s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed",
-          };
-        })
-        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
-    [students, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]
-  );
 
   const reassignmentStudents = selectedPeriod ? students.filter(s =>
     !isMentoringOptOut(s) && !activeMentor(s)
@@ -1825,7 +1821,7 @@ export default function MentorAssignmentPage() {
     const studentRows = students.map(student => {
       const rec = student?.mentorHistory?.[selectedPeriod] || {};
       const mentor = activeMentor(student);
-      const day = n(rec.day) || n(student?.selectedMentorDay);
+      const day = mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.day) || n(student?.selectedMentorDay);
       return {
         studentId: student.id,
         studentName: student.name,
@@ -1833,12 +1829,12 @@ export default function MentorAssignmentPage() {
         persistentFixedMentor: n(student.persistentFixedMentor),
         fixedMentor: n(student.fixedMentor),
         directorConsulting: student.directorConsultingByPeriod?.[selectedPeriod] || null,
-        assignmentIssue: n(rec.assignmentIssue),
-        pendingReassignment: rec.pendingReassignment || null,
+        assignmentIssue: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.assignmentIssue),
+        pendingReassignment: mentor === DIRECTOR_MENTOR_NAME ? null : rec.pendingReassignment || null,
         mentor: mentor || "",
         day: day || "",
-        slotStart: n(rec.slotStart),
-        slotEnd: n(rec.slotEnd),
+        slotStart: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.slotStart),
+        slotEnd: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.slotEnd),
         attended: rec.attended !== false,
         missedDay: n(rec.missedDay),
         missedReason: n(rec.missedReason),
@@ -1849,7 +1845,7 @@ export default function MentorAssignmentPage() {
     });
 
     const studentsForPortalImport = studentRows.map(row => {
-      const derivedDays = DAY_SET.has(row.day)
+      const derivedDays = row.mentor === DIRECTOR_MENTOR_NAME ? [] : DAY_SET.has(row.day)
         ? [row.day]
         : row.mentor
         ? workingDays(row.mentor, mentorsByDay)
@@ -1865,7 +1861,7 @@ export default function MentorAssignmentPage() {
 
     const mentorMap = {};
     studentRows.forEach(row => {
-      if (row.mentoringOptOut || !row.mentor) return;
+      if ((row.mentoringOptOut && row.mentor !== DIRECTOR_MENTOR_NAME) || !row.mentor) return;
       if (!mentorMap[row.mentor]) {
         mentorMap[row.mentor] = {
           mentor: row.mentor,
@@ -1951,8 +1947,8 @@ export default function MentorAssignmentPage() {
       },
       summary: {
         totalStudents: students.length,
-        optOutStudents: studentRows.filter(row => row.mentoringOptOut).length,
-        assignedStudents: studentRows.filter(row => !row.mentoringOptOut && row.mentor).length,
+        optOutStudents: studentRows.filter(row => row.mentoringOptOut && row.mentor !== DIRECTOR_MENTOR_NAME).length,
+        assignedStudents: studentRows.filter(row => row.mentor && (!row.mentoringOptOut || row.mentor === DIRECTOR_MENTOR_NAME)).length,
         unassignedStudents: studentRows.filter(row => !row.mentoringOptOut && !row.mentor).length,
       },
       mentorMatches,
@@ -1993,7 +1989,9 @@ export default function MentorAssignmentPage() {
       const hasTimeline = DAYS.some(day =>
         Object.keys(importedTimeline?.[day] || {}).length > 0
       );
-      if (!hasTimeline) {
+      const hasDirectorConsulting = Array.isArray(payload?.studentsDetail) &&
+        payload.studentsDetail.some(row => n(row?.mentor) === DIRECTOR_MENTOR_NAME);
+      if (!hasTimeline && !hasDirectorConsulting) {
         throw new Error("파일에 복구할 요일별 멘토링 현황표가 없습니다.");
       }
 
@@ -2133,7 +2131,7 @@ export default function MentorAssignmentPage() {
   const fixedMentorConflict = useMemo(() => {
     const map = {};
     students.forEach(student => {
-      if (isMentoringOptOut(student)) {
+      if (isMentoringOptOut(student) || activeMentor(student) === DIRECTOR_MENTOR_NAME) {
         map[student.id] = false;
         return;
       }
@@ -2790,46 +2788,16 @@ export default function MentorAssignmentPage() {
             {directorConsultingTargets.length ? (
               <div className="flex flex-wrap gap-2">
                 {directorConsultingTargets.map(student => (
-                  <span key={`director-target-${student.id}`} className="inline-flex flex-wrap items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-1 text-sm">
+                  <label key={`director-target-${student.id}`} className="inline-flex flex-wrap items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-1 text-sm">
+                    <input type="checkbox" checked={student.completed} disabled={student.completed}
+                      title="진행 완료" onChange={e => { if (e.target.checked) completeDirectorConsulting(student.id); }} />
                     <span className="font-medium">{student.name}</span>
                     <span className="text-xs text-slate-600">{student.status}</span>
-                  </span>
-                ))}
-              </div>
-            ) : <div className="text-sm text-gray-500">지정된 학생이 없습니다.</div>}
-            <p className="mt-2 text-xs text-gray-500">대상 지정 후 멘토 배정하기를 눌러 적용하세요. 시간 불일치 학생은 실제 원장 배정 인원에 포함되지 않습니다.</p>
-          </div>
-          <div className="border-t border-indigo-200 pt-3" aria-label="실제 원장 배정 학생 목록">
-          <h3 className="mb-2 text-sm font-semibold">실제 원장 배정 · {directorConsultingStudents.length}명</h3>
-          {directorConsultingStudents.length === 0 ? (
-            <div className="text-sm text-gray-500">아직 원장으로 배정된 학생이 없습니다.</div>
-          ) : (
-            <div className="space-y-1">
-              <div className="flex flex-wrap gap-2">
-                {directorConsultingStudents.map(student => (
-                  <label
-                    key={`director-forced-${student.id}`}
-                    className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-sm font-semibold text-indigo-950"
-                  >
-                    {student.assigned ? (
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5"
-                        checked={student.completed}
-                        disabled={student.completed}
-                        onChange={e => {
-                          if (e.target.checked) completeDirectorConsulting(student.id);
-                        }}
-                        title="진행 완료"
-                      />
-                    ) : null}
-                    <span>{student.name}</span>
-                    <span className="text-[11px] text-indigo-700">{student.completed ? "진행 완료" : student.assigned ? "원장님 배정" : "배정 대기"}</span>
                   </label>
                 ))}
               </div>
-            </div>
-          )}
+            ) : <div className="text-sm text-gray-500">지정된 학생이 없습니다.</div>}
+            <p className="mt-2 text-xs text-gray-500">원장은 항상 가능하므로 목록 등록만으로 지정 완료됩니다. 시간·요일·정원과 무관하며, 일반 멘토링 미희망 학생도 원장 컨설팅은 지정할 수 있습니다.</p>
           </div>
         </div>
         <div className="border rounded p-3 bg-rose-50 shadow-sm">

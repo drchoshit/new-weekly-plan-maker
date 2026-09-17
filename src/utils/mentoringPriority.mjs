@@ -17,7 +17,7 @@ export function getPriorityMentor(student, periodId) {
 }
 
 export function setDirectorConsultingStatus(student, periodId, status) {
-  return {
+  const next = {
     ...student,
     // 원장 지정에 사용되던 이전 필드만 정리하고 일반 고정 멘토는 보존한다.
     fixedMentor: clean(student.fixedMentor) === DIRECTOR_MENTOR_NAME ? "" : student.fixedMentor,
@@ -26,4 +26,19 @@ export function setDirectorConsultingStatus(student, periodId, status) {
       [periodId]: { status },
     },
   };
+  return status === "pending" ? assignDirectorConsulting(next, periodId) : next;
+}
+
+// 원장은 상시 가능하므로 목록 지정만으로 확정한다. 요일/슬롯/정원 검사를 하지 않는다.
+export function assignDirectorConsulting(student, periodId) {
+  const old = student.mentorHistory?.[periodId] || {};
+  const record = { ...old, mentor: DIRECTOR_MENTOR_NAME, actualMentor: DIRECTOR_MENTOR_NAME,
+    day: "", attended: true, missedCarryOver: false };
+  for (const key of ["slotStart", "slotEnd", "sessionMinutes", "fixedNoOverlap", "assignmentIssue",
+    "pendingReassignment", "autoRank", "missedDay", "missedReason", "manualApplied", "manualMentor",
+    "rescheduleDate", "rescheduleDay"]) delete record[key];
+  if (student.selectedMentor === DIRECTOR_MENTOR_NAME && student.selectedMentorDay === "" &&
+      JSON.stringify(old) === JSON.stringify(record)) return student;
+  return { ...student, selectedMentor: DIRECTOR_MENTOR_NAME, selectedMentorDay: "",
+    mentorHistory: { ...(student.mentorHistory || {}), [periodId]: record } };
 }
