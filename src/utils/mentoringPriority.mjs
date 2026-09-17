@@ -10,10 +10,19 @@ export function isDirectorConsultingPending(student, periodId) {
 
 export function getPriorityMentor(student, periodId) {
   if (isDirectorConsultingPending(student, periodId)) return DIRECTOR_MENTOR_NAME;
+  return getSavedFixedMentor(student);
+}
+
+export function getSavedFixedMentor(student) {
   const permanent = clean(student?.persistentFixedMentor);
   if (permanent && permanent !== DIRECTOR_MENTOR_NAME) return permanent;
   const legacy = clean(student?.fixedMentor);
   return legacy === DIRECTOR_MENTOR_NAME ? "" : legacy;
+}
+
+export function releaseDirectorConsulting(student, periodId) {
+  return isDirectorConsultingPending(student, periodId)
+    ? setDirectorConsultingStatus(student, periodId, "released") : student;
 }
 
 export function setDirectorConsultingStatus(student, periodId, status) {

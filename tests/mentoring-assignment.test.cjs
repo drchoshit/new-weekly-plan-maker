@@ -84,6 +84,10 @@ function directorPanel() {
 function directorTargetList() {
   return nodes(render()).find(node => node.props["aria-label"] === "원장 컨설팅 지정 학생 목록");
 }
+function designateDirector(names) {
+  nodes(directorPanel()).find(node => node.type === "textarea").props.onChange({ target: { value: names } });
+  button("대상 지정").props.onClick();
+}
 function applyAlternative(id, mentor) {
   select(`학생${id} 대체 멘토`, mentor);
   const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
@@ -98,8 +102,7 @@ test("원장 지정과 완료가 영구 고정 멘토/기존 고정 멘토를 �
   button("확인").props.onClick();
   nodes(render()).find(node => node.type === "textarea").props.onChange({ target: { value: "학생1" } });
   button("대상 지정").props.onClick();
-  assert.equal(current.students[0].fixedMentor, "기존멘토");
-  auto();
+  assert.equal(current.students[0].fixedMentor, "");
   assert.equal(rec(1).mentor, "원장님");
   assert.equal(current.students[0].persistentFixedMentor, "멘토A");
   nodes(directorPanel()).find(node => node.type === "input").props.onChange({ target: { checked: true } });
@@ -114,7 +117,7 @@ test("원장 지정과 완료가 영구 고정 멘토/기존 고정 멘토를 �
 
 test("원장 지정을 완료하지 않아도 해당 주차에만 적용된다", () => {
   setup([student(1, { persistentFixedMentor: "멘토A", directorConsultingByPeriod: { [week1]: { status: "pending" } } })]);
-  auto();
+  designateDirector("학생1");
   assert.equal(rec(1).mentor, "원장님");
   current.selectedPeriod = week2;
   auto();
@@ -124,7 +127,7 @@ test("원장 지정을 완료하지 않아도 해당 주차에만 적용된다",
 test("원장 컨설팅은 시간 불일치여도 확정하며 재배정 목록에 표시하지 않는다", () => {
   setup([student(1, { persistentFixedMentor: "멘토A", directorConsultingByPeriod: { [week1]: { status: "pending" } } })],
     [{ name: "원장님", time: "13:00~14:00" }, { name: "멘토A", time: "09:00~11:00" }]);
-  auto();
+  designateDirector("학생1");
   assert.equal(rec(1).mentor, "원장님");
   assert.equal(rec(1).day, "");
   assert.equal(rec(1).assignmentIssue, undefined);
@@ -170,9 +173,9 @@ test("기존 원장 시간 불일치 기록도 지정 완료로 보이며 시간
   assert.match(text(directorTargetList()), /학생1지정 완료/);
   assert.ok(!text(render()).includes("원장님 시간 미일치"));
   auto();
-  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(1).mentor, undefined);
   assert.equal(rec(1).fixedNoOverlap, undefined);
-  assert.equal(rec(1).day, "");
+  assert.equal(current.students[0].directorConsultingByPeriod[week1].status, "released");
 });
 
 test("기존 원장 지정 이전은 고정 멘토를 보존하고 이전 주차 이력을 유지한다", async () => {
@@ -231,7 +234,7 @@ test("파일 저장/복구 및 재접속 이후 고정 멘토와 시간 조정 �
 
 test("원장 주차가 끝난 일반 학생은 기존 자동 배정으로 돌아간다", () => {
   setup([student(1, { directorConsultingByPeriod: { [week1]: { status: "pending" } } })]);
-  auto();
+  designateDirector("학생1");
   assert.equal(rec(1).mentor, "원장님");
   current.selectedPeriod = week2;
   auto();
@@ -325,10 +328,11 @@ test("쉼표로 지정한 원장 대상은 기존 배정/시간 불일치/미희
   assert.match(text(targetList()), /학생1지정 완료/);
   auto();
   for (const id of [1, 2, 3]) {
-    assert.equal(rec(id).mentor, "원장님");
-    assert.equal(rec(id).assignmentIssue, undefined);
+    assert.notEqual(rec(id).mentor, "원장님");
+    assert.equal(current.students.find(s => s.id === id).directorConsultingByPeriod[week1].status, "released");
   }
-  assert.match(text(targetList()), /학생2지정 완료/);
+  assert.equal(rec(1).mentor, "멘토A");
+  assert.match(text(targetList()), /학생2임시 지정 해제/);
   current.selectedPeriod = week2;
   assert.match(text(targetList()), /지정 학생 · 0명/);
 });
@@ -349,9 +353,9 @@ test("원장 근무표와 출결 없이도 목록 지정만으로 완료되고 �
   auto();
   assert.equal(rec(21).mentor, "멘토A");
   const popup = nodes(render()).find(node => node.type === "textarea" && node.props.readOnly).props.value;
-  assert.match(popup, /원장 컨설팅 지정: 20명/);
-  assert.match(popup, /일반 멘토 배정 성공: 1 \/ 1/);
-  assert.match(popup, /재배정 필요 0명/);
+  assert.match(popup, /원장 임시 지정 해제: 20명/);
+  assert.match(popup, /일반 멘토 배정 성공: 1 \/ 20/);
+  assert.match(popup, /재배정 필요 19명/);
   current.selectedPeriod = week2;
   auto();
   assert.equal(rec(1).mentor, undefined, "다음 주 일반 멘토링 미희망 설정 유지");
@@ -388,7 +392,7 @@ test("저장된 원장 시간 불일치를 정리하되 고정 멘토와 다른 
 
 test("시간표 없는 원장 컨설팅도 파일로 저장하고 복구할 수 있다", async () => {
   setup([student(1, { mentoringOptOut: true, persistentFixedMentor: "멘토A", directorConsultingByPeriod: { [week1]: { status: "pending" } } })], []);
-  auto();
+  designateDirector("학생1");
   let exported;
   const create = URL.createObjectURL;
   const revoke = URL.revokeObjectURL;
@@ -411,4 +415,47 @@ test("시간표 없는 원장 컨설팅도 파일로 저장하고 복구할 수 
   assert.equal(current.students[0].mentoringOptOut, true);
   assert.equal(current.students[0].persistentFixedMentor, "멘토A");
   assert.match(text(directorTargetList()), /학생1지정 완료/);
+});
+
+test("고정멘토 열은 저장값만 표시하고 다음 자동배정에서 원장 임시 지정이 해제된다", () => {
+  setup([student(1, { fixedMentor: "멘토A" })], [
+    { name: "멘토A", time: "09:00~11:00" }, { name: "멘토B", time: "09:00~11:00" },
+  ]);
+  const fixedCell = () => nodes(render()).find(node => node.props["aria-label"] === "학생1 고정멘토 표시");
+  assert.equal(text(fixedCell()), "멘토A", "기존 저장값도 표시한다");
+  assert.ok(!nodes(fixedCell()).some(node => ["input", "button", "select"].includes(node.type)));
+  nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: 1 });
+  select("학생1 매주 고정 멘토", "멘토B");
+  assert.equal(text(fixedCell()), "멘토A", "확인 전에는 기존 저장값 유지");
+  button("확인").props.onClick();
+  assert.equal(text(fixedCell()), "멘토B");
+  designateDirector("학생1");
+  assert.equal(text(fixedCell()), "원장님");
+  assert.equal(current.students[0].persistentFixedMentor, "멘토B");
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  button("화요일 우선 배정").props.onClick();
+  assert.equal(current.selectedPeriod, week1);
+  assert.equal(rec(1).mentor, "멘토B", "같은 주차의 다음 자동배정도 고정 멘토로 복귀");
+  assert.equal(text(fixedCell()), "멘토B");
+  assert.equal(current.students[0].directorConsultingByPeriod[week1].status, "released");
+  auto();
+  assert.equal(rec(1).mentor, "멘토B", "재실행해도 원장 지정이 살아나지 않는다");
+  designateDirector("학생1");
+  assert.equal(text(fixedCell()), "원장님", "다시 원장 지정 가능");
+  auto();
+  assert.equal(text(fixedCell()), "멘토B");
+  nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: 1 });
+  select("학생1 매주 고정 멘토", "");
+  button("확인").props.onClick();
+  assert.equal(text(fixedCell()), "-", "고정 해제 시 예전 입력값이 되살아나지 않는다");
+});
+
+test("원장 임시 지정 후 고정 멘토가 없으면 다음 자동배정에서 일반 멘토를 찾는다", () => {
+  setup([student(1)]);
+  designateDirector("학생1");
+  assert.equal(rec(1).mentor, "원장님");
+  auto();
+  assert.equal(rec(1).mentor, "멘토A");
+  assert.equal(text(nodes(render()).find(node => node.props["aria-label"] === "학생1 고정멘토 표시")), "-");
 });

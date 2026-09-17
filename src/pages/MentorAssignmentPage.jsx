@@ -2,7 +2,7 @@
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
-import { DIRECTOR_MENTOR_NAME, getPriorityMentor, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
+import { DIRECTOR_MENTOR_NAME, getPriorityMentor, getSavedFixedMentor, releaseDirectorConsulting, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
@@ -358,7 +358,7 @@ export default function MentorAssignmentPage() {
   const [fixedMentorSaveMessage, setFixedMentorSaveMessage] = useState("");
   const fixedMentorStudent = students.find(s => s.id === fixedMentorStudentId);
   const savedFixedMentorStudents = students
-    .filter(s => n(s.persistentFixedMentor))
+    .filter(s => getSavedFixedMentor(s))
     .sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
   const selectFixedMentorStudent = option => {
     setFixedMentorStudentId(option?.value ?? null);
@@ -367,8 +367,8 @@ export default function MentorAssignmentPage() {
   };
   const saveFixedMentor = () => {
     if (!fixedMentorStudent) return;
-    const mentor = n(fixedMentorDraft ?? fixedMentorStudent.persistentFixedMentor);
-    setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: mentor } : s));
+    const mentor = n(fixedMentorDraft ?? getSavedFixedMentor(fixedMentorStudent));
+    setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: mentor, fixedMentor: "" } : s));
     setFixedMentorDraft(null);
     setFixedMentorSaveMessage(mentor
       ? `${fixedMentorStudent.name} → ${mentor} 저장했습니다.`
@@ -376,7 +376,7 @@ export default function MentorAssignmentPage() {
   };
   const fixedMentorStudentOptions = students.map(s => ({
     value: s.id,
-    label: `${s.name}${isNaN(Number(s.birthYear)) || !s.birthYear ? "" : ` (${s.birthYear})`}${s.mentoringOptOut ? " · 미희망" : ""}${n(s.persistentFixedMentor) ? ` · ${n(s.persistentFixedMentor)}` : ""}`,
+    label: `${s.name}${isNaN(Number(s.birthYear)) || !s.birthYear ? "" : ` (${s.birthYear})`}${s.mentoringOptOut ? " · 미희망" : ""}${getSavedFixedMentor(s) ? ` · ${getSavedFixedMentor(s)}` : ""}`,
   }));
   const restoreFileInputRef = React.useRef(null);
   const lastAutoSnapshotAtRef = React.useRef("");
@@ -513,26 +513,6 @@ export default function MentorAssignmentPage() {
       : hasAnyOverlapWithMentor(student, mentor);
     if (rec.fixedNoOverlap || (mentor && !fits)) return "";
     return mentor;
-  };
-
-  const resolveFixedMentorDay = student => {
-    const fixedMentor = getPriorityMentor(student, selectedPeriod);
-    if (!fixedMentor) return "";
-
-    let best = { day: "", ov: -1 };
-    DAYS.forEach(day => {
-      const sTime = periodAttendance?.[student.id]?.[day];
-      if (!sTime) return;
-      const entries = (mentorsByDay?.[day] || []).filter(m => n(m?.name) === fixedMentor);
-      if (!entries.length) return;
-      entries.forEach(entry => {
-        const attRanges = normalizeAttendanceRanges(sTime);
-        const ov = Math.max(0, ...ranges(mTime(entry)).map(r => overlapWithAnyRange(attRanges, r.st, r.en)));
-        if (ov > best.ov) best = { day, ov };
-      });
-    });
-
-    return best.day || workingDays(fixedMentor, mentorsByDay)[0] || "";
   };
 
   const hasAnyOverlapWithMentor = (student, mentorName) => {
@@ -797,8 +777,9 @@ export default function MentorAssignmentPage() {
   const autoAssign = (preferredDayRaw = "") => {
     if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
     const preferredPriorityDay = n(preferredDayRaw);
-    const directorStudents = students.filter(s => isDirectorConsultingPending(s, selectedPeriod));
-    const assignableStudents = students.filter(s => !isMentoringOptOut(s) && !isDirectorConsultingPending(s, selectedPeriod));
+    const releasedDirectorCount = students.filter(s => isDirectorConsultingPending(s, selectedPeriod)).length;
+    const assignmentStudents = students.map(s => releaseDirectorConsulting(s, selectedPeriod));
+    const assignableStudents = assignmentStudents.filter(s => !isMentoringOptOut(s));
     const byStudent = {};
     assignableStudents.forEach(s => {
       byStudent[s.id] = buildCandidates(s);
@@ -1116,8 +1097,8 @@ export default function MentorAssignmentPage() {
     });
 
     setAssignments(
-      students.map(s => {
-        if (isMentoringOptOut(s) || isDirectorConsultingPending(s, selectedPeriod)) return emptyAssignment(s.id);
+      assignmentStudents.map(s => {
+        if (isMentoringOptOut(s)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
         return {
           studentId: s.id,
@@ -1145,8 +1126,8 @@ export default function MentorAssignmentPage() {
     );
 
     setStudents(prev =>
-      prev.map(s => {
-        if (isDirectorConsultingPending(s, selectedPeriod)) return assignDirectorConsulting(s, selectedPeriod);
+      prev.map(original => {
+        const s = releaseDirectorConsulting(original, selectedPeriod);
         if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
         const chosen = pick[s.id]?.chosen;
         if (!chosen) {
@@ -1205,13 +1186,13 @@ export default function MentorAssignmentPage() {
       .join(", ");
     setPopup({
       title: "자동 배정 완료",
-      text: `기준 주차: ${selectedPeriod}\n원장 컨설팅 지정: ${directorStudents.length}명 (시간 배정 없음)\n일반 멘토 배정 성공: ${done} / ${assignableStudents.length}\n미희망 제외 인원: ${
-        students.length - assignableStudents.length - directorStudents.length
+      text: `기준 주차: ${selectedPeriod}\n원장 임시 지정 해제: ${releasedDirectorCount}명 (저장된 고정 멘토 우선)\n일반 멘토 배정 성공: ${done} / ${assignableStudents.length}\n미희망 제외 인원: ${
+        students.length - assignableStudents.length
       }명\n최대 인원(기본): ${maxPerMentor}명\n멘토별 최대 인원: ${
         mentorCapacitySummary || "없음"
       }\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
         preferredPriorityDay ? `${preferredPriorityDay}요일` : "없음"
-      }\n배정 순서: 원장 컨설팅 → 고정 멘토 → 자동 배정\n(배정 ${slotAssignedCount}명 / 재배정 필요 ${missingFromAutoAssign.length}명)\n\n${
+      }\n배정 순서: 원장 임시 지정 해제 → 저장된 고정 멘토 → 자동 배정\n(배정 ${slotAssignedCount}명 / 재배정 필요 ${missingFromAutoAssign.length}명)\n\n${
         lines || "배정 없음"
       }`,
     });
@@ -1251,54 +1232,6 @@ export default function MentorAssignmentPage() {
     setPopup({
       title: `${student.name} 멘토 변경`,
       text: `${student.name} -> ${mentor}\n\n${row?.reasons?.[key] || ""}\n\n${loadText(next)}`,
-    });
-  };
-
-  const applyFixedMentorToSelection = student => {
-    if (!selectedPeriod) {
-      window.alert("기준 주차를 먼저 선택해 주세요.");
-      return;
-    }
-    if (isMentoringOptOut(student)) {
-      setPopup({
-        title: "멘토링 미희망",
-        text: `${student.name}: 멘토링 미희망 인원으로 설정되어 고정멘토 적용이 비활성화됩니다.`,
-      });
-      return;
-    }
-
-    const fixed = getPriorityMentor(student, selectedPeriod);
-    if (!fixed) {
-      setPopup({
-        title: "고정멘토 적용",
-        text: `${student.name}: 고정멘토를 먼저 입력해 주세요.`,
-      });
-      return;
-    }
-
-    const day = resolveFixedMentorDay(student);
-    if (!commitMentor(student, fixed, day)) return;
-    const next = students.map(s =>
-      s.id === student.id
-        ? {
-            ...s,
-            selectedMentor: fixed,
-            selectedMentorDay: day,
-            mentorHistory: {
-              ...(s.mentorHistory || {}),
-              [selectedPeriod]: {
-                ...(s.mentorHistory?.[selectedPeriod] || {}),
-                mentor: fixed,
-                actualMentor: fixed,
-                day,
-              },
-            },
-          }
-        : s
-    );
-    setPopup({
-      title: `${student.name} 고정멘토 적용`,
-      text: `${student.name} -> ${fixed}\n선택 요일: ${day || "미지정"}\n\n${loadText(next)}`,
     });
   };
 
@@ -1771,10 +1704,11 @@ export default function MentorAssignmentPage() {
   // 원장 컨설팅은 목록 등록으로 지정 완료되며 일반 멘토 시간표와 별도로 관리한다.
   const directorConsultingTargets = students.filter(s =>
     isDirectorConsultingPending(s, selectedPeriod) ||
-    s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed"
+    ["completed", "released"].includes(s?.directorConsultingByPeriod?.[selectedPeriod]?.status)
   ).map(s => {
     const completed = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed";
-    return { id: s.id, name: s.name, completed, status: completed ? "진행 완료" : "지정 완료" };
+    const released = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "released";
+    return { id: s.id, name: s.name, completed, status: completed ? "진행 완료" : released ? "임시 지정 해제" : "지정 완료" };
   }).sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
 
   const reassignmentStudents = selectedPeriod ? students.filter(s =>
@@ -1826,7 +1760,7 @@ export default function MentorAssignmentPage() {
         studentId: student.id,
         studentName: student.name,
         mentoringOptOut: isMentoringOptOut(student),
-        persistentFixedMentor: n(student.persistentFixedMentor),
+        persistentFixedMentor: getSavedFixedMentor(student),
         fixedMentor: n(student.fixedMentor),
         directorConsulting: student.directorConsultingByPeriod?.[selectedPeriod] || null,
         assignmentIssue: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.assignmentIssue),
@@ -2443,7 +2377,7 @@ export default function MentorAssignmentPage() {
       <section className="border rounded p-4 bg-emerald-50" aria-label="학생별 고정 멘토 설정">
         <h2 className="text-lg font-semibold">학생별 고정 멘토 설정 (매주 유지)</h2>
         <p className="text-sm text-gray-600 mt-1 mb-3">
-          학생을 검색해 고정 멘토를 설정하세요. 원장 컨설팅 → 고정 멘토 → 자동 배정 순서로 적용되며, 고정 멘토는 매주 유지됩니다.
+          학생을 검색해 고정 멘토를 설정하세요. 원장 임시 지정은 다음 자동배정 때 해제되며, 저장된 고정 멘토가 우선 적용됩니다.
         </p>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 max-w-2xl">
           <div className="w-full sm:w-80">
@@ -2466,14 +2400,14 @@ export default function MentorAssignmentPage() {
               <select
                 aria-label={`${fixedMentorStudent.name} 매주 고정 멘토`}
                 className="border rounded p-1 max-w-[180px]"
-                value={fixedMentorDraft ?? fixedMentorStudent.persistentFixedMentor ?? ""}
+                value={fixedMentorDraft ?? getSavedFixedMentor(fixedMentorStudent)}
                 onChange={e => {
                   setFixedMentorDraft(e.target.value);
                   setFixedMentorSaveMessage("");
                 }}
               >
                 <option value="">설정 안 함</option>
-                {Array.from(new Set([...mentorNames, n(fixedMentorStudent.persistentFixedMentor)])).filter(name => name && name !== DIRECTOR_MENTOR_NAME).map(name => (
+                {Array.from(new Set([...mentorNames, getSavedFixedMentor(fixedMentorStudent)])).filter(name => name && name !== DIRECTOR_MENTOR_NAME).map(name => (
                   <option key={name} value={name}>{name}</option>
                 ))}
               </select>
@@ -2485,7 +2419,7 @@ export default function MentorAssignmentPage() {
           </button>
         </div>
         {fixedMentorSaveMessage ? <p role="status" className="mt-2 text-sm text-emerald-800">{fixedMentorSaveMessage}</p> : null}
-        <p className="text-xs text-gray-500 mt-2">멘토 선택 후 확인을 눌러 저장하세요. 주간 배정에는 멘토 배정하기로 적용됩니다. 설정 안 함은 기존 고정멘토 값을 사용합니다.</p>
+        <p className="text-xs text-gray-500 mt-2">확인을 누르면 아래 고정멘토 열에 표시됩니다. 주간 배정에는 멘토 배정하기로 적용됩니다. 설정 안 함을 저장하면 고정이 해제됩니다.</p>
         <div className="mt-3 border-t border-emerald-200 pt-3" aria-label="저장된 고정 멘토 목록">
           <h3 className="text-sm font-semibold mb-2">고정 멘토 설정 학생 · {savedFixedMentorStudents.length}명</h3>
           {savedFixedMentorStudents.length ? (
@@ -2497,7 +2431,7 @@ export default function MentorAssignmentPage() {
                 <tbody>{savedFixedMentorStudents.map(student => (
                   <tr key={student.id} className="border-t border-emerald-100">
                     <td className="px-3 py-2">{student.name}{student.mentoringOptOut ? " (미희망)" : ""}</td>
-                    <td className="px-3 py-2">{student.persistentFixedMentor}</td>
+                    <td className="px-3 py-2">{getSavedFixedMentor(student)}</td>
                   </tr>
                 ))}</tbody>
               </table>
@@ -2642,7 +2576,7 @@ export default function MentorAssignmentPage() {
           <thead className="bg-gray-100">
             <tr>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">이름</th>
-              <th className="border p-2 sticky top-0 bg-gray-100 z-20">기존 고정멘토</th>
+              <th className="border p-2 sticky top-0 bg-gray-100 z-20">고정멘토</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">멘토 배제</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 멘토</th>
               <th className="border p-2 sticky top-0 bg-gray-100 z-20">지난주 요일</th>
@@ -2666,30 +2600,10 @@ export default function MentorAssignmentPage() {
               return (
                 <tr key={s.id} className={`${fixedMentorConflict[s.id] ? "bg-red-50" : ""} ${dimClass}`.trim()}>
                   <td className="border p-2 font-medium">{s.name}</td>
-                  <td className="border p-2">
-                    <div className="flex items-center justify-center gap-2">
-                      <input
-                        className="border rounded px-2 py-1 w-28"
-                        value={s.fixedMentor || ""}
-                        onChange={e => {
-                          const value = e.target.value;
-                          setStudents(prev => prev.map(x => {
-                            if (x.id !== s.id) return x;
-                            return n(value) === DIRECTOR_MENTOR_NAME && selectedPeriod
-                              ? setDirectorConsultingStatus(x, selectedPeriod, "pending")
-                              : { ...x, fixedMentor: value };
-                          }));
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="bg-blue-600 text-white text-xs px-2 py-1 rounded disabled:opacity-40"
-                        onClick={() => applyFixedMentorToSelection(s)}
-                        disabled={!getPriorityMentor(s, selectedPeriod) || !selectedPeriod || isMentoringOptOut(s)}
-                      >
-                        적용
-                      </button>
-                    </div>
+                  <td className="border p-2" aria-label={`${s.name} 고정멘토 표시`}>
+                    {currentMentor === DIRECTOR_MENTOR_NAME ? (
+                      <span className="font-semibold text-indigo-700">원장님</span>
+                    ) : getSavedFixedMentor(s) || <span className="text-gray-400">-</span>}
                   </td>
                   <td className="border p-2">
                     <input
@@ -2797,7 +2711,7 @@ export default function MentorAssignmentPage() {
                 ))}
               </div>
             ) : <div className="text-sm text-gray-500">지정된 학생이 없습니다.</div>}
-            <p className="mt-2 text-xs text-gray-500">원장은 항상 가능하므로 목록 등록만으로 지정 완료됩니다. 시간·요일·정원과 무관하며, 일반 멘토링 미희망 학생도 원장 컨설팅은 지정할 수 있습니다.</p>
+            <p className="mt-2 text-xs text-gray-500">목록 등록 즉시 원장으로 임시 지정됩니다. 시간 배정은 하지 않으며, 다음 멘토 자동배정 시 임시 지정이 해제되고 저장된 고정 멘토로 돌아갑니다.</p>
           </div>
         </div>
         <div className="border rounded p-3 bg-rose-50 shadow-sm">
