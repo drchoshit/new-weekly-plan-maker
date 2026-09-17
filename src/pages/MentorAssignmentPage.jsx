@@ -1747,16 +1747,27 @@ export default function MentorAssignmentPage() {
       .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko"));
   }, [students, lastAutoAssignMissingIds, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
 
+  // 대상 지정은 실제 배정과 별개다. 시간 불일치/기존 멘토가 있어도 지정 사실을 보여준다.
+  const directorConsultingTargets = students.filter(s =>
+    isDirectorConsultingPending(s, selectedPeriod) ||
+    s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed"
+  ).map(s => {
+    const currentMentor = activeMentor(s);
+    const completed = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed";
+    const status = isMentoringOptOut(s) ? "미희망 · 배정 제외" :
+      completed ? "진행 완료" :
+      currentMentor === DIRECTOR_MENTOR_NAME ? "원장님 배정" :
+      !hasAnyOverlapWithMentor(s, DIRECTOR_MENTOR_NAME) ? "시간 불일치 · 재배정 필요" :
+      currentMentor ? `대상 지정 · 현재 ${currentMentor}` : "대상 지정 · 배정 대기";
+    return { id: s.id, name: s.name, status };
+  }).sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
+
   const directorConsultingStudents = useMemo(
     () =>
       students
         .filter(s => {
           if (isMentoringOptOut(s)) return false;
-          const rec = s?.mentorHistory?.[selectedPeriod] || {};
-          return activeMentor(s) === DIRECTOR_MENTOR_NAME || (
-            isDirectorConsultingPending(s, selectedPeriod) && !activeMentor(s) &&
-            hasAnyOverlapWithMentor(s, DIRECTOR_MENTOR_NAME) && !rec.assignmentIssue && !rec.fixedNoOverlap
-          );
+          return activeMentor(s) === DIRECTOR_MENTOR_NAME;
         })
         .map(s => {
           return {
@@ -2774,11 +2785,26 @@ export default function MentorAssignmentPage() {
               대상 지정
             </button>
           </div>
+          <div className="mb-3" aria-label="원장 컨설팅 지정 학생 목록">
+            <h3 className="mb-2 text-sm font-semibold">지정 학생 · {directorConsultingTargets.length}명</h3>
+            {directorConsultingTargets.length ? (
+              <div className="flex flex-wrap gap-2">
+                {directorConsultingTargets.map(student => (
+                  <span key={`director-target-${student.id}`} className="inline-flex flex-wrap items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-1 text-sm">
+                    <span className="font-medium">{student.name}</span>
+                    <span className="text-xs text-slate-600">{student.status}</span>
+                  </span>
+                ))}
+              </div>
+            ) : <div className="text-sm text-gray-500">지정된 학생이 없습니다.</div>}
+            <p className="mt-2 text-xs text-gray-500">대상 지정 후 멘토 배정하기를 눌러 적용하세요. 시간 불일치 학생은 실제 원장 배정 인원에 포함되지 않습니다.</p>
+          </div>
+          <div className="border-t border-indigo-200 pt-3" aria-label="실제 원장 배정 학생 목록">
+          <h3 className="mb-2 text-sm font-semibold">실제 원장 배정 · {directorConsultingStudents.length}명</h3>
           {directorConsultingStudents.length === 0 ? (
-            <div className="text-sm text-gray-500">기록 없음</div>
+            <div className="text-sm text-gray-500">아직 원장으로 배정된 학생이 없습니다.</div>
           ) : (
             <div className="space-y-1">
-              <div className="text-sm text-gray-600">총 {directorConsultingStudents.length}명 (시간 불일치는 별도 목록)</div>
               <div className="flex flex-wrap gap-2">
                 {directorConsultingStudents.map(student => (
                   <label
@@ -2804,6 +2830,7 @@ export default function MentorAssignmentPage() {
               </div>
             </div>
           )}
+          </div>
         </div>
         <div className="border rounded p-3 bg-rose-50 shadow-sm">
           <h2 className="text-lg font-semibold mb-2">이번 자동배정 누락 학생</h2>

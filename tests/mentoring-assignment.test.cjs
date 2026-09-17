@@ -81,6 +81,9 @@ function rec(id, week = current.selectedPeriod) { return current.students.find(s
 function directorPanel() {
   return nodes(render()).find(node => node.type === "div" && node.props.className === "border rounded p-3 bg-indigo-50 shadow-sm");
 }
+function directorAssignedList() {
+  return nodes(render()).find(node => node.props["aria-label"] === "실제 원장 배정 학생 목록");
+}
 function applyAlternative(id, mentor) {
   select(`학생${id} 대체 멘토`, mentor);
   const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
@@ -124,7 +127,7 @@ test("원장 시간 불일치는 원장 목록과 배정에서 제외하고 대�
   auto();
   assert.equal(rec(1).mentor, undefined);
   assert.match(rec(1).assignmentIssue, /원장 컨설팅 시간 미일치/);
-  assert.ok(!text(directorPanel()).includes("학생1"));
+  assert.ok(!text(directorAssignedList()).includes("학생1"));
   applyAlternative(1, "멘토A");
   assert.equal(rec(1).mentor, "멘토A");
   assert.equal(rec(1).assignmentIssue, undefined);
@@ -164,7 +167,7 @@ test("미희망 학생은 제외하고 복수 출결 구간을 사용할 수 있
 test("이전 강제 배정 기록은 원장 목록과 저장된 시간표에서 제외한다", () => {
   setup([student(1, { fixedMentor: "원장님", selectedMentor: "원장님", mentorHistory: { [week1]: { mentor: "원장님", day: "월", fixedNoOverlap: true } } })], [{ name: "원장님", time: "13:00~14:00" }]);
   current.mentorAssignmentSnapshots[week1] = { timelineByDay: { 월: { 원장님: { slots: [], unassigned: ["학생1"], assignedCount: 0, requestCount: 1 } } } };
-  assert.ok(!text(directorPanel()).includes("학생1"));
+  assert.ok(!text(directorAssignedList()).includes("학생1"));
   assert.match(text(render()), /원장님 시간 미일치/);
 });
 
@@ -289,4 +292,38 @@ test("고정 멘토는 확인할 때만 저장되며 목록에는 저장된 학�
   assert.equal(current.students[0].persistentFixedMentor, "");
   assert.ok(!text(savedList()).includes("학생1"));
   assert.match(text(savedList()), /학생2멘토A/);
+});
+
+test("쉼표로 지정한 원장 대상은 기존 배정/시간 불일치/미희망 여부와 관계없이 즉시 표시된다", () => {
+  setup([
+    student(1, { persistentFixedMentor: "멘토A", mentorHistory: { [week1]: { mentor: "멘토A", day: "월" } } }),
+    student(2, { mentorHistory: { [week1]: { assignmentIssue: "기존 배정 실패" } } }),
+    student(3, { mentoringOptOut: true }),
+  ]);
+  current.attendance[week1][2].월 = ["13:00", "14:00"];
+  const targetList = () => nodes(render()).find(node => node.props["aria-label"] === "원장 컨설팅 지정 학생 목록");
+  const assignNames = value => {
+    nodes(directorPanel()).find(node => node.type === "textarea").props.onChange({ target: { value } });
+    button("대상 지정").props.onClick();
+  };
+  assignNames(" 학생1, 학생2, 학생3, 학생1, 없는학생 ");
+  assert.match(text(targetList()), /지정 학생 · 3명/);
+  assert.match(text(targetList()), /학생1대상 지정 · 현재 멘토A/);
+  assert.match(text(targetList()), /학생2시간 불일치 · 재배정 필요/);
+  assert.match(text(targetList()), /학생3미희망 · 배정 제외/);
+  assert.match(nodes(render()).find(node => node.type === "textarea" && node.props.readOnly).props.value, /학생 목록에서 찾지 못함: 없는학생/);
+  assert.match(text(directorAssignedList()), /실제 원장 배정 · 0명/);
+  assert.equal(rec(1).mentor, "멘토A", "목록 복구가 기존 실제 배정을 바꾸지 않는다");
+  assert.equal(current.students[0].persistentFixedMentor, "멘토A");
+  assignNames("학생1");
+  assert.match(text(targetList()), /지정 학생 · 3명/);
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  assert.match(text(targetList()), /학생1대상 지정 · 현재 멘토A/);
+  auto();
+  assert.match(text(directorAssignedList()), /실제 원장 배정 · 1명/);
+  assert.ok(!text(directorAssignedList()).includes("학생2"));
+  assert.match(text(targetList()), /학생2시간 불일치 · 재배정 필요/);
+  current.selectedPeriod = week2;
+  assert.match(text(targetList()), /지정 학생 · 0명/);
 });
