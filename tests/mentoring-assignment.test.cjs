@@ -81,9 +81,8 @@ function rec(id, week = current.selectedPeriod) { return current.students.find(s
 function directorPanel() {
   return nodes(render()).find(node => node.type === "div" && node.props.className === "border rounded p-3 bg-indigo-50 shadow-sm");
 }
-function applyAlternative(id, mentor, day = "월") {
+function applyAlternative(id, mentor) {
   select(`학생${id} 대체 멘토`, mentor);
-  select(`학생${id} 대체 요일`, day);
   const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
   const row = nodes(panel).find(node => node.type === "tr" && text(node).startsWith(`학생${id}`));
   button("적용", row).props.onClick();
@@ -91,6 +90,7 @@ function applyAlternative(id, mentor, day = "월") {
 
 test("원장 지정과 완료가 영구 고정 멘토/기존 고정 멘토를 보존하고 다음 주 복귀한다", () => {
   setup([student(1, { fixedMentor: "기존멘토" })]);
+  nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: 1 });
   select("학생1 매주 고정 멘토", "멘토A");
   nodes(render()).find(node => node.type === "textarea").props.onChange({ target: { value: "학생1" } });
   button("대상 지정").props.onClick();
@@ -228,4 +228,39 @@ test("원장 주차가 끝난 일반 학생은 기존 자동 배정으로 돌아
   current.selectedPeriod = week2;
   auto();
   assert.equal(rec(1).mentor, "멘토A");
+});
+
+test("대체 멘토만 선택하면 근무 요일 중 학생과 시간이 맞는 요일을 자동 배정한다", () => {
+  setup([student(1)]);
+  current.mentorsByDay = {
+    월: [{ name: "멘토A", time: "13:00~14:00" }],
+    수: [{ name: "멘토A", time: "09:00~11:00" }],
+  };
+  current.attendance[week1][1].수 = ["09:00", "10:00"];
+  applyAlternative(1, "멘토A");
+  assert.equal(rec(1).mentor, "멘토A");
+  assert.equal(rec(1).day, "수");
+});
+
+test("시간이 모두 안 맞아도 멘토 출근일로 희망 배정하며 변경된 근무표를 반영한다", () => {
+  setup([student(1)]);
+  current.mentorsByDay = { 목: [{ name: "멘토A", time: "13:00~14:00" }] };
+  applyAlternative(1, "멘토A");
+  assert.deepEqual(rec(1).pendingReassignment, { mentor: "멘토A", day: "목" });
+  current.mentorsByDay = { 금: [{ name: "멘토A", time: "09:00~11:00" }] };
+  current.attendance[week1][1].금 = ["09:00", "10:00"];
+  // 이전 희망 요일을 사용하지 않고 총괄멘토 Info의 현재 근무표로 다시 계산한다.
+  hooks = [];
+  const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
+  button("적용", panel).props.onClick();
+  assert.equal(rec(1).day, "금");
+  assert.equal(rec(1).mentor, "멘토A");
+});
+
+test("근무 요일이 삭제된 대체 멘토는 임의의 요일로 배정하지 않는다", () => {
+  setup([student(1, { mentorHistory: { [week1]: { pendingReassignment: { mentor: "퇴사멘토", day: "월" } } } })]);
+  const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
+  assert.equal(button("적용", panel).props.disabled, true);
+  button("적용", panel).props.onClick();
+  assert.equal(rec(1).mentor, undefined);
 });

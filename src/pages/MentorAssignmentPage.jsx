@@ -353,6 +353,12 @@ export default function MentorAssignmentPage() {
   const [timelineViewMode, setTimelineViewMode] = useState("computed");
   const [directorConsultingInput, setDirectorConsultingInput] = useState("");
   const [reassignmentDrafts, setReassignmentDrafts] = useState({});
+  const [fixedMentorStudentId, setFixedMentorStudentId] = useState(null);
+  const fixedMentorStudent = students.find(s => s.id === fixedMentorStudentId);
+  const fixedMentorStudentOptions = students.map(s => ({
+    value: s.id,
+    label: `${s.name}${isNaN(Number(s.birthYear)) || !s.birthYear ? "" : ` (${s.birthYear})`}${s.mentoringOptOut ? " · 미희망" : ""}${n(s.persistentFixedMentor) ? ` · ${n(s.persistentFixedMentor)}` : ""}`,
+  }));
   const restoreFileInputRef = React.useRef(null);
   const lastAutoSnapshotAtRef = React.useRef("");
   const closePopup = () => setPopup({ title: "", text: "" });
@@ -1760,15 +1766,23 @@ export default function MentorAssignmentPage() {
     return { student, reason, pending: rec.pendingReassignment };
   }) : [];
 
+  const resolveReassignmentDay = (student, mentor) => {
+    const days = workingDays(mentor, mentorsByDay);
+    return days.find(day => hasOverlapOnDay(student, mentor, day)) ||
+      days.find(day => normalizeAttendanceRanges(periodAttendance?.[student.id]?.[day]).length > 0) ||
+      days[0] || "";
+  };
+
   const applyReassignment = student => {
     const draft = reassignmentDrafts[student.id] || student.mentorHistory?.[selectedPeriod]?.pendingReassignment || {};
-    if (!draft.mentor || !draft.day) return;
-    const assigned = commitMentor(student, draft.mentor, draft.day);
+    const day = resolveReassignmentDay(student, draft.mentor);
+    if (!draft.mentor || !day) return;
+    const assigned = commitMentor(student, draft.mentor, day);
     setPopup({
       title: assigned ? "대체 멘토 배정 완료" : "대체 멘토 지정 · 시간 조정 필요",
       text: assigned
-        ? `${student.name} → ${draft.mentor} (${draft.day})\n저장된 고정 멘토는 유지됩니다.`
-        : `${student.name} → ${draft.mentor} (${draft.day}) 희망 배정을 저장했습니다.\n학생 출결 또는 멘토 근무 시간을 조정한 뒤 다시 적용해 주세요. 시간 조정 전에는 배정 인원에 포함되지 않습니다.`,
+        ? `${student.name} → ${draft.mentor} (${day})\n총괄멘토 Info의 근무 요일로 자동 배정했습니다. 저장된 고정 멘토는 유지됩니다.`
+        : `${student.name} → ${draft.mentor} (${day}) 희망 배정을 저장했습니다.\n학생 출결 또는 멘토 근무 시간을 조정한 뒤 다시 적용해 주세요. 시간 조정 전에는 배정 인원에 포함되지 않습니다.`,
     });
   };
 
@@ -2401,66 +2415,77 @@ export default function MentorAssignmentPage() {
       <section className="border rounded p-4 bg-emerald-50" aria-label="학생별 고정 멘토 설정">
         <h2 className="text-lg font-semibold">학생별 고정 멘토 설정 (매주 유지)</h2>
         <p className="text-sm text-gray-600 mt-1 mb-3">
-          배정 순서: 이번 주 원장 컨설팅 → 고정 멘토 → 기존 자동 배정.
-          원장 컨설팅을 지정해도 아래 고정 멘토는 유지되며, 다음 주에는 고정 멘토로 돌아갑니다.
-          설정 후 멘토 배정하기를 눌러 적용하세요.
+          학생을 검색해 고정 멘토를 설정하세요. 원장 컨설팅 → 고정 멘토 → 자동 배정 순서로 적용되며, 고정 멘토는 매주 유지됩니다.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-          {students.map(student => (
-            <label key={`persistent-${student.id}`} className="flex items-center justify-between gap-2 border rounded bg-white p-2 text-sm">
-              <span>{student.name}{isMentoringOptOut(student) ? " (미희망)" : ""}</span>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 max-w-2xl">
+          <div className="w-full sm:w-80">
+            <Select
+              aria-label="고정 멘토 설정 학생 검색"
+              placeholder="학생 이름 검색..."
+              options={fixedMentorStudentOptions}
+              value={fixedMentorStudentOptions.find(option => option.value === fixedMentorStudentId) || null}
+              onChange={option => setFixedMentorStudentId(option?.value ?? null)}
+              isSearchable
+              isClearable
+              maxMenuHeight={200}
+              noOptionsMessage={() => "검색 결과가 없습니다."}
+              styles={{ menu: base => ({ ...base, zIndex: 30 }) }}
+            />
+          </div>
+          {fixedMentorStudent ? (
+            <label className="flex items-center gap-2 text-sm">
+              <span className="whitespace-nowrap">고정 멘토</span>
               <select
-                aria-label={`${student.name} 매주 고정 멘토`}
+                aria-label={`${fixedMentorStudent.name} 매주 고정 멘토`}
                 className="border rounded p-1 max-w-[180px]"
-                value={student.persistentFixedMentor || ""}
+                value={fixedMentorStudent.persistentFixedMentor || ""}
                 onChange={e => {
                   const value = e.target.value;
-                  setStudents(prev => prev.map(s => s.id === student.id ? { ...s, persistentFixedMentor: value } : s));
+                  setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: value } : s));
                 }}
               >
                 <option value="">설정 안 함</option>
-                {Array.from(new Set([...mentorNames, n(student.persistentFixedMentor)])).filter(name => name && name !== DIRECTOR_MENTOR_NAME).map(name => (
+                {Array.from(new Set([...mentorNames, n(fixedMentorStudent.persistentFixedMentor)])).filter(name => name && name !== DIRECTOR_MENTOR_NAME).map(name => (
                   <option key={name} value={name}>{name}</option>
                 ))}
               </select>
             </label>
-          ))}
+          ) : null}
         </div>
-        <p className="text-xs text-gray-500 mt-2">설정 안 함을 선택하면 기존 고정멘토 값이 있을 경우 해당 값을 사용합니다.</p>
+        <p className="text-xs text-gray-500 mt-2">설정 후 멘토 배정하기를 눌러 적용하세요. 설정 안 함은 기존 고정멘토 값을 사용합니다.</p>
       </section>
 
       <section className="border rounded p-4 bg-rose-50" aria-label="시간 불일치 및 미배정 학생">
         <h2 className="text-lg font-semibold">시간 불일치 / 미배정 · 대체 멘토 지정</h2>
         <p className="text-sm text-gray-600 my-2">
-          시간이 맞지 않는 학생은 원장 배정 인원에 포함되지 않습니다. 다른 멘토와 요일을 지정할 수 있으며,
-          시간이 맞지 않으면 희망 배정으로 저장됩니다. 시간표 조정 후 다시 적용해 주세요.
+          멘토만 선택하면 총괄멘토 Info의 근무 요일로 자동 배정됩니다. 여러 요일에 출근하면 학생과 시간이 맞는 요일을 우선합니다.
+          시간이 맞지 않으면 희망 배정으로 저장되며, 시간표 조정 후 다시 적용해 주세요.
         </p>
         {!reassignmentStudents.length ? <p className="text-sm text-gray-500">해당 학생 없음</p> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left border-collapse">
-              <thead><tr><th className="p-2">학생</th><th className="p-2">사유</th><th className="p-2">대체 멘토 / 요일</th><th className="p-2">적용</th></tr></thead>
+              <thead><tr><th className="p-2">학생</th><th className="p-2">사유</th><th className="p-2">대체 멘토 / 자동 배정 요일</th><th className="p-2">적용</th></tr></thead>
               <tbody>{reassignmentStudents.map(({ student, reason, pending }) => {
                 const draft = reassignmentDrafts[student.id] || pending || {};
+                const autoDay = resolveReassignmentDay(student, draft.mentor);
                 return (
                   <tr key={student.id} className="border-t border-rose-200">
                     <td className="p-2 font-medium">{student.name}</td>
                     <td className="p-2 text-rose-800">{reason}{pending ? <div className="text-xs">희망 배정: {pending.mentor} ({pending.day})</div> : null}</td>
                     <td className="p-2">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <select aria-label={`${student.name} 대체 멘토`} className="border rounded p-1" value={draft.mentor || ""}
-                          onChange={e => { const mentor = e.target.value; setReassignmentDrafts(prev => ({ ...prev, [student.id]: { ...draft, mentor, day: "" } })); }}>
+                          onChange={e => { const mentor = e.target.value; setReassignmentDrafts(prev => ({ ...prev, [student.id]: { mentor } })); }}>
                           <option value="">멘토 선택</option>
                           {mentorNames.map(name => <option key={name} value={name}>{name}{hasAnyOverlapWithMentor(student, name) ? " (시간 일치)" : " (시간 조정 필요)"}</option>)}
                         </select>
-                        <select aria-label={`${student.name} 대체 요일`} className="border rounded p-1" value={draft.day || ""}
-                          onChange={e => { const day = e.target.value; setReassignmentDrafts(prev => ({ ...prev, [student.id]: { ...draft, day } })); }}>
-                          <option value="">요일 선택</option>
-                          {DAYS.map(day => <option key={day} value={day}>{day}{draft.mentor && hasOverlapOnDay(student, draft.mentor, day) ? " (시간 일치)" : ""}</option>)}
-                        </select>
+                        {draft.mentor ? <span className="text-xs text-gray-600" aria-live="polite">
+                          {autoDay ? `${autoDay}요일 자동 배정${hasOverlapOnDay(student, draft.mentor, autoDay) ? "" : " · 시간 조정 필요"}` : "총괄멘토 Info에 근무 요일을 등록해 주세요."}
+                        </span> : null}
                       </div>
                     </td>
                     <td className="p-2"><button type="button" className="bg-blue-600 text-white rounded px-3 py-1 disabled:opacity-40"
-                      disabled={!draft.mentor || !draft.day} onClick={() => applyReassignment(student)}>적용</button></td>
+                      disabled={!draft.mentor || !autoDay} onClick={() => applyReassignment(student)}>적용</button></td>
                   </tr>
                 );
               })}</tbody>
