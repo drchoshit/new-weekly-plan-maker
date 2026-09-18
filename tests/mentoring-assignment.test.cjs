@@ -332,7 +332,7 @@ test("쉼표로 지정한 원장 대상은 기존 배정/시간 불일치/미희
     assert.equal(current.students.find(s => s.id === id).directorConsultingByPeriod[week1].status, "released");
   }
   assert.equal(rec(1).mentor, "멘토A");
-  assert.match(text(targetList()), /학생2임시 지정 해제/);
+  assert.match(text(targetList()), /지정 학생 · 0명/);
   current.selectedPeriod = week2;
   assert.match(text(targetList()), /지정 학생 · 0명/);
 });
@@ -458,4 +458,120 @@ test("원장 임시 지정 후 고정 멘토가 없으면 다음 자동배정에
   auto();
   assert.equal(rec(1).mentor, "멘토A");
   assert.equal(text(nodes(render()).find(node => node.props["aria-label"] === "학생1 고정멘토 표시")), "-");
+});
+
+function recurringPanel() {
+  return nodes(render()).find(node => node.props["aria-label"] === "매주 원장 컨설팅 설정");
+}
+function selectRecurring(ids) {
+  nodes(recurringPanel()).find(node => node.props["aria-label"] === "매주 원장 컨설팅 학생 검색")
+    .props.onChange(ids.map(id => ({ value: id, label: `학생${id}` })));
+}
+function completeDirector(id) {
+  nodes(directorTargetList()).find(node => node.props["aria-label"] === `학생${id} 원장 컨설팅 완료`)
+    .props.onChange({ target: { checked: true } });
+}
+
+test("원장 완료 체크는 즉시 목록에서 숨기고 재접속에도 완료 이력을 유지한다", () => {
+  setup([student(1), student(2)]);
+  designateDirector("학생1, 학생2");
+  completeDirector(1);
+  assert.doesNotMatch(text(directorTargetList()), /학생1/);
+  assert.match(text(directorTargetList()), /학생2지정 완료/);
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(current.students[0].directorConsultingByPeriod[week1].status, "completed");
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  assert.doesNotMatch(text(directorTargetList()), /학생1/);
+});
+
+test("매주 원장은 적용 후 저장되며 완료/자동배정/다음 주에도 원장만 유지한다", () => {
+  setup([student(1, { persistentFixedMentor: "멘토A" }), student(2, { mentoringOptOut: true }), student(3)],
+    [{ name: "멘토A", time: "09:00~09:20" }]);
+  current.attendance[week1][1] = {};
+  current.attendance[week1][2] = {};
+  selectRecurring([1, 2]);
+  assert.equal(current.students[0].recurringDirectorConsulting, undefined, "적용 전에는 저장하지 않는다");
+  button("적용", recurringPanel()).props.onClick();
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(2).mentor, "원장님");
+  assert.equal(current.students[0].persistentFixedMentor, "멘토A");
+  completeDirector(1);
+  assert.doesNotMatch(text(directorTargetList()), /학생1/);
+  auto();
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(2).mentor, "원장님");
+  assert.equal(rec(3).mentor, "멘토A", "원장 학생은 일반 멘토 슬롯을 쓰지 않는다");
+  assert.doesNotMatch(text(directorTargetList()), /학생1/, "자동배정으로 완료 체크를 되돌리지 않는다");
+  assert.equal(current.assignments.find(a => a.studentId === 1).first, "");
+  assert.equal(rec(1).slotStart, undefined);
+  const unassigned = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
+  assert.doesNotMatch(text(unassigned), /학생[12]/);
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  current.selectedPeriod = week2;
+  assert.match(text(directorTargetList()), /학생1매주 원장/);
+  button("화요일 우선 배정").props.onClick();
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(2).mentor, "원장님");
+  assert.equal(current.students[0].directorConsultingByPeriod[week1].status, "completed");
+  nodes(recurringPanel()).find(node => node.props["aria-label"] === "학생1 매주 원장 컨설팅 취소").props.onClick();
+  auto();
+  assert.equal(rec(1).mentor, "멘토A", "매주 원장 취소 후 저장된 고정 멘토 복귀");
+  assert.equal(rec(1, week1).mentor, "원장님", "이전 주 진행 기록은 보존");
+});
+
+test("원장 리셋은 매주 원장만 남기며 일반 배정/고정 멘토/이전 주 이력을 보존한다", () => {
+  setup([student(1), student(2, { persistentFixedMentor: "멘토A", mentorHistory: { [week2]: { mentor: "이전기록" } } }), student(3, { mentoringOptOut: true }), student(4)]);
+  auto();
+  const regular = { ...rec(4) };
+  selectRecurring([1]);
+  button("적용", recurringPanel()).props.onClick();
+  designateDirector("학생2, 학생3");
+  completeDirector(1);
+  completeDirector(3);
+  button("리셋", directorPanel()).props.onClick();
+  assert.match(text(directorTargetList()), /지정 학생 · 1명/);
+  assert.match(text(directorTargetList()), /학생1매주 원장/);
+  assert.doesNotMatch(text(directorTargetList()), /학생[234]/);
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(2).mentor, undefined);
+  assert.equal(rec(3).mentor, undefined);
+  assert.deepEqual(rec(4), regular);
+  assert.equal(current.students[1].persistentFixedMentor, "멘토A");
+  assert.equal(rec(2, week2).mentor, "이전기록");
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  assert.match(text(directorTargetList()), /지정 학생 · 1명/);
+  auto();
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(rec(2).mentor, "멘토A");
+  assert.doesNotMatch(text(directorTargetList()), /학생[234]/);
+});
+
+test("매주 원장 설정은 배정 파일 저장/복구와 다음 주 자동배정에도 유지된다", async () => {
+  setup([student(1, { persistentFixedMentor: "멘토A" })], []);
+  selectRecurring([1]);
+  button("적용", recurringPanel()).props.onClick();
+  completeDirector(1);
+  let exported;
+  const create = URL.createObjectURL;
+  const revoke = URL.revokeObjectURL;
+  URL.createObjectURL = blob => { exported = blob; return "blob:test"; };
+  URL.revokeObjectURL = () => {};
+  global.document = { createElement: () => ({ click() {} }) };
+  try { button("멘토 매칭 정보 저장하기").props.onClick(); }
+  finally { URL.createObjectURL = create; URL.revokeObjectURL = revoke; }
+  const savedText = await exported.text();
+  assert.equal(JSON.parse(savedText).studentsDetail[0].recurringDirectorConsulting, true);
+  current.students = [student(1)];
+  const upload = nodes(render()).find(node => node.type === "input" && node.props.type === "file");
+  await upload.props.onChange({ target: { value: "test.json", files: [{ name: "test.json", text: async () => savedText }] } });
+  assert.equal(current.students[0].recurringDirectorConsulting, true);
+  assert.doesNotMatch(text(directorTargetList()), /학생1/);
+  current.selectedPeriod = week2;
+  auto();
+  assert.equal(rec(1).mentor, "원장님");
+  assert.equal(current.students[0].persistentFixedMentor, "멘토A");
+  assert.match(text(directorTargetList()), /학생1매주 원장/);
 });

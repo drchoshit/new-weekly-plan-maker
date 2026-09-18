@@ -2,7 +2,7 @@
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
-import { DIRECTOR_MENTOR_NAME, getPriorityMentor, getSavedFixedMentor, releaseDirectorConsulting, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
+import { DIRECTOR_MENTOR_NAME, getPriorityMentor, getSavedFixedMentor, releaseDirectorConsulting, isRecurringDirectorConsulting, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
@@ -352,6 +352,7 @@ export default function MentorAssignmentPage() {
   const [lastAutoAssignAt, setLastAutoAssignAt] = useState("");
   const [timelineViewMode, setTimelineViewMode] = useState("computed");
   const [directorConsultingInput, setDirectorConsultingInput] = useState("");
+  const [recurringDirectorDraft, setRecurringDirectorDraft] = useState([]);
   const [reassignmentDrafts, setReassignmentDrafts] = useState({});
   const [fixedMentorStudentId, setFixedMentorStudentId] = useState(null);
   const [fixedMentorDraft, setFixedMentorDraft] = useState(null);
@@ -401,7 +402,8 @@ export default function MentorAssignmentPage() {
 
   useEffect(() => {
     if (!selectedPeriod) return;
-    const normalize = s => !isDirectorConsultingPending(s, selectedPeriod) ? s :
+    const normalize = s => isRecurringDirectorConsulting(s) ? assignDirectorConsulting(s, selectedPeriod) :
+      !isDirectorConsultingPending(s, selectedPeriod) ? s :
       !s.directorConsultingByPeriod ? setDirectorConsultingStatus(s, selectedPeriod, "pending") :
       assignDirectorConsulting(s, selectedPeriod);
     if (students.some(s => normalize(s) !== s)) {
@@ -509,7 +511,7 @@ export default function MentorAssignmentPage() {
     return r?.mentor ? { mentor: n(r.mentor), day: n(r.day) || null } : null;
   };
   const activeMentor = student => {
-    if (isDirectorConsultingPending(student, selectedPeriod)) return DIRECTOR_MENTOR_NAME;
+    if (isRecurringDirectorConsulting(student) || isDirectorConsultingPending(student, selectedPeriod)) return DIRECTOR_MENTOR_NAME;
     if (isMentoringOptOut(student)) return "";
     const rec = student?.mentorHistory?.[selectedPeriod] || {};
     const mentor = n(rec.actualMentor) || n(rec.mentor);
@@ -545,7 +547,7 @@ export default function MentorAssignmentPage() {
   };
 
   const buildCandidates = student => {
-    if (isMentoringOptOut(student) || isDirectorConsultingPending(student, selectedPeriod)) return [];
+    if (isMentoringOptOut(student) || isRecurringDirectorConsulting(student) || isDirectorConsultingPending(student, selectedPeriod)) return [];
     const excluded = new Set(
       [student?.bannedMentor1, student?.bannedMentor2]
         .filter(Boolean)
@@ -628,6 +630,11 @@ export default function MentorAssignmentPage() {
 
   const commitMentor = (student, mentorName, day) => {
     if (!selectedPeriod || !mentorName) return;
+    if (isRecurringDirectorConsulting(student)) {
+      setStudents(prev => prev.map(s => s.id === student.id ? assignDirectorConsulting(s, selectedPeriod) : s));
+      setTimelineViewMode("computed");
+      return true;
+    }
     if (mentorName === DIRECTOR_MENTOR_NAME) {
       setStudents(prev => prev.map(s => s.id === student.id ? setDirectorConsultingStatus(s, selectedPeriod, "pending") : s));
       setTimelineViewMode("computed");
@@ -709,6 +716,7 @@ export default function MentorAssignmentPage() {
       prev.map(s => {
         if (s.id !== studentId) return s;
         const next = { ...s, mentoringOptOut: checked };
+        if (selectedPeriod && isRecurringDirectorConsulting(next)) return assignDirectorConsulting(next, selectedPeriod);
         if (!checked) return next;
         if (!selectedPeriod) {
           return { ...next, selectedMentor: "", selectedMentorDay: "" };
@@ -763,6 +771,45 @@ export default function MentorAssignmentPage() {
     });
   };
 
+  const applyRecurringDirectorConsulting = () => {
+    if (!selectedPeriod || !recurringDirectorDraft.length) return;
+    const ids = new Set(recurringDirectorDraft.map(option => option.value));
+    setStudents(prev => prev.map(s => ids.has(s.id)
+      ? setDirectorConsultingStatus({ ...s, recurringDirectorConsulting: true }, selectedPeriod, "pending")
+      : s));
+    setAssignments(prev => (prev || []).map(a => ids.has(a.studentId) ? emptyAssignment(a.studentId) : a));
+    setRecurringDirectorDraft([]);
+    setTimelineViewMode("computed");
+  };
+
+  const cancelRecurringDirectorConsulting = studentId => {
+    if (!selectedPeriod) return;
+    setStudents(prev => prev.map(s => s.id === studentId
+      ? clearCurrentMentoring(setDirectorConsultingStatus({ ...s, recurringDirectorConsulting: false }, selectedPeriod, "released"))
+      : s));
+    setAssignments(prev => (prev || []).map(a => a.studentId === studentId ? emptyAssignment(studentId) : a));
+    setRecurringDirectorDraft(prev => prev.filter(option => option.value !== studentId));
+    setTimelineViewMode("computed");
+  };
+
+  const resetDirectorConsulting = () => {
+    if (!selectedPeriod) return;
+    const hasDirectorAssignment = s => {
+      const rec = s.mentorHistory?.[selectedPeriod] || {};
+      return isDirectorConsultingPending(s, selectedPeriod) || (n(rec.actualMentor) || n(rec.mentor)) === DIRECTOR_MENTOR_NAME;
+    };
+    const ids = new Set(students.filter(s => isRecurringDirectorConsulting(s) || hasDirectorAssignment(s)).map(s => s.id));
+    setStudents(prev => prev.map(s => {
+      if (isRecurringDirectorConsulting(s)) return setDirectorConsultingStatus(s, selectedPeriod, "pending");
+      if (!s.directorConsultingByPeriod?.[selectedPeriod] && !hasDirectorAssignment(s)) return s;
+      const next = setDirectorConsultingStatus(s, selectedPeriod, "released");
+      return hasDirectorAssignment(s) ? clearCurrentMentoring(next) : next;
+    }));
+    setAssignments(prev => (prev || []).map(a => ids.has(a.studentId) ? emptyAssignment(a.studentId) : a));
+    setDirectorConsultingInput("");
+    setTimelineViewMode("computed");
+  };
+
   const completeDirectorConsulting = studentId => {
     const target = students.find(s => s.id === studentId);
     if (!target || !selectedPeriod) return;
@@ -777,16 +824,19 @@ export default function MentorAssignmentPage() {
     setTimelineViewMode("computed");
     setPopup({
       title: "원장컨설팅 진행 완료",
-      text: `${target.name}: 원장 컨설팅 완료를 기록했습니다. 이번 주 진행 기록은 유지되며, 다음 자동 배정부터 저장된 고정 멘토가 우선 적용됩니다.`,
+      text: `${target.name}: 원장 컨설팅 완료를 기록하고 목록에서 제외했습니다. ${isRecurringDirectorConsulting(target)
+        ? "매주 원장 지정은 유지되며 다음 주 목록에 다시 표시됩니다."
+        : "이번 주 진행 기록은 유지되며, 다음 자동 배정부터 저장된 고정 멘토가 우선 적용됩니다."}`,
     });
   };
 
   const autoAssign = (preferredDayRaw = "") => {
     if (!selectedPeriod) return window.alert("기준 주차를 먼저 선택해 주세요.");
     const preferredPriorityDay = n(preferredDayRaw);
-    const releasedDirectorCount = students.filter(s => isDirectorConsultingPending(s, selectedPeriod)).length;
+    const releasedDirectorCount = students.filter(s => !isRecurringDirectorConsulting(s) && isDirectorConsultingPending(s, selectedPeriod)).length;
+    const recurringDirectorCount = students.filter(isRecurringDirectorConsulting).length;
     const assignmentStudents = students.map(s => releaseDirectorConsulting(s, selectedPeriod));
-    const assignableStudents = assignmentStudents.filter(s => !isMentoringOptOut(s));
+    const assignableStudents = assignmentStudents.filter(s => !isMentoringOptOut(s) && !isRecurringDirectorConsulting(s));
     const byStudent = {};
     assignableStudents.forEach(s => {
       byStudent[s.id] = buildCandidates(s);
@@ -1105,7 +1155,7 @@ export default function MentorAssignmentPage() {
 
     setAssignments(
       assignmentStudents.map(s => {
-        if (isMentoringOptOut(s)) return emptyAssignment(s.id);
+        if (isMentoringOptOut(s) || isRecurringDirectorConsulting(s)) return emptyAssignment(s.id);
         const r = pick[s.id]?.ranks || [];
         return {
           studentId: s.id,
@@ -1135,6 +1185,7 @@ export default function MentorAssignmentPage() {
     setStudents(prev =>
       prev.map(original => {
         const s = releaseDirectorConsulting(original, selectedPeriod);
+        if (isRecurringDirectorConsulting(s)) return assignDirectorConsulting(s, selectedPeriod);
         if (isMentoringOptOut(s)) return clearCurrentMentoring(s);
         const chosen = pick[s.id]?.chosen;
         if (!chosen) {
@@ -1193,8 +1244,8 @@ export default function MentorAssignmentPage() {
       .join(", ");
     setPopup({
       title: "자동 배정 완료",
-      text: `기준 주차: ${selectedPeriod}\n원장 임시 지정 해제: ${releasedDirectorCount}명 (저장된 고정 멘토 우선)\n일반 멘토 배정 성공: ${done} / ${assignableStudents.length}\n미희망 제외 인원: ${
-        students.length - assignableStudents.length
+      text: `기준 주차: ${selectedPeriod}\n매주 원장 지정 유지: ${recurringDirectorCount}명\n원장 임시 지정 해제: ${releasedDirectorCount}명 (저장된 고정 멘토 우선)\n일반 멘토 배정 성공: ${done} / ${assignableStudents.length}\n미희망 제외 인원: ${
+        students.filter(s => isMentoringOptOut(s) && !isRecurringDirectorConsulting(s)).length
       }명\n최대 인원(기본): ${maxPerMentor}명\n멘토별 최대 인원: ${
         mentorCapacitySummary || "없음"
       }\n세션 길이: ${minOverlapRequired}분\n우선 요일: ${
@@ -1709,14 +1760,11 @@ export default function MentorAssignmentPage() {
   }, [students, lastAutoAssignMissingIds, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
 
   // 원장 컨설팅은 목록 등록으로 지정 완료되며 일반 멘토 시간표와 별도로 관리한다.
-  const directorConsultingTargets = students.filter(s =>
-    isDirectorConsultingPending(s, selectedPeriod) ||
-    ["completed", "released"].includes(s?.directorConsultingByPeriod?.[selectedPeriod]?.status)
-  ).map(s => {
-    const completed = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "completed";
-    const released = s?.directorConsultingByPeriod?.[selectedPeriod]?.status === "released";
-    return { id: s.id, name: s.name, completed, status: completed ? "진행 완료" : released ? "임시 지정 해제" : "지정 완료" };
-  }).sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
+  const recurringDirectorStudents = students.filter(isRecurringDirectorConsulting)
+    .sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
+  const directorConsultingTargets = students.filter(s => selectedPeriod && isDirectorConsultingPending(s, selectedPeriod))
+    .map(s => ({ id: s.id, name: s.name, status: isRecurringDirectorConsulting(s) ? "매주 원장" : "지정 완료" }))
+    .sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
 
   const reassignmentStudents = selectedPeriod ? students.filter(s =>
     !isMentoringOptOut(s) && !activeMentor(s)
@@ -1770,6 +1818,7 @@ export default function MentorAssignmentPage() {
         studentName: student.name,
         mentoringOptOut: isMentoringOptOut(student),
         persistentFixedMentor: getSavedFixedMentor(student),
+        recurringDirectorConsulting: isRecurringDirectorConsulting(student),
         fixedMentor: n(student.fixedMentor),
         directorConsulting: student.directorConsultingByPeriod?.[selectedPeriod] || null,
         assignmentIssue: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.assignmentIssue),
@@ -1973,6 +2022,7 @@ export default function MentorAssignmentPage() {
           return {
             ...student,
             ...(Object.hasOwn(row, "persistentFixedMentor") ? { persistentFixedMentor: n(row.persistentFixedMentor) } : {}),
+            ...(Object.hasOwn(row, "recurringDirectorConsulting") ? { recurringDirectorConsulting: row.recurringDirectorConsulting === true } : {}),
             ...(Object.hasOwn(row, "fixedMentor") ? { fixedMentor: n(row.fixedMentor) } : {}),
             ...(Object.hasOwn(row, "directorConsulting") ? {
               directorConsultingByPeriod: { ...(student.directorConsultingByPeriod || {}), [periodId]: row.directorConsulting },
@@ -2704,6 +2754,7 @@ export default function MentorAssignmentPage() {
               value={directorConsultingInput}
               onChange={e => setDirectorConsultingInput(e.target.value)}
             />
+            <div className="flex items-center gap-2">
             <button
               type="button"
               className="rounded bg-indigo-600 px-3 py-1 text-sm font-semibold text-white disabled:opacity-40"
@@ -2712,6 +2763,40 @@ export default function MentorAssignmentPage() {
             >
               대상 지정
             </button>
+            <button type="button" onClick={resetDirectorConsulting} disabled={!selectedPeriod}
+              className="rounded border border-indigo-300 bg-white px-3 py-1 text-sm font-semibold text-indigo-800 disabled:opacity-40">
+              리셋
+            </button>
+            </div>
+            <p className="text-xs text-gray-500">리셋하면 이번 주 임시 지정을 지우고 매주 원장 지정 학생만 남깁니다.</p>
+          </div>
+          <div className="mb-3 border-y border-indigo-200 py-3" aria-label="매주 원장 컨설팅 설정">
+            <h3 className="mb-2 text-sm font-semibold">매주 원장 컨설팅</h3>
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <Select aria-label="매주 원장 컨설팅 학생 검색" placeholder="학생 검색 및 선택..."
+                  isMulti isSearchable isClearable
+                  options={fixedMentorStudentOptions.filter(option => !recurringDirectorStudents.some(s => s.id === option.value))}
+                  value={recurringDirectorDraft} onChange={options => setRecurringDirectorDraft(options || [])}
+                  maxMenuHeight={200} noOptionsMessage={() => "검색 결과가 없습니다."}
+                  styles={{ menu: base => ({ ...base, zIndex: 30 }) }} />
+              </div>
+              <button type="button" onClick={applyRecurringDirectorConsulting}
+                disabled={!selectedPeriod || !recurringDirectorDraft.length}
+                className="rounded bg-indigo-600 px-3 py-1 text-sm font-semibold text-white disabled:opacity-40">적용</button>
+            </div>
+            <p className="mt-2 text-xs text-gray-500">매주 유지되며, 일반 멘토 자동배정에서 제외하고 항상 원장님으로 배정합니다.</p>
+            <div className="mt-2 flex flex-wrap gap-2" aria-label="매주 원장 컨설팅 저장 학생 목록">
+              {recurringDirectorStudents.map(student => (
+                <span key={student.id} className="inline-flex items-center gap-2 rounded border border-indigo-200 bg-white px-2 py-1 text-sm">
+                  {student.name}
+                  <button type="button" aria-label={`${student.name} 매주 원장 컨설팅 취소`}
+                    disabled={!selectedPeriod} onClick={() => cancelRecurringDirectorConsulting(student.id)}
+                    className="text-xs text-gray-500 underline disabled:opacity-40">취소</button>
+                </span>
+              ))}
+              {!recurringDirectorStudents.length ? <span className="text-xs text-gray-500">설정된 학생이 없습니다.</span> : null}
+            </div>
           </div>
           <div className="mb-3" aria-label="원장 컨설팅 지정 학생 목록">
             <h3 className="mb-2 text-sm font-semibold">지정 학생 · {directorConsultingTargets.length}명</h3>
@@ -2719,7 +2804,7 @@ export default function MentorAssignmentPage() {
               <div className="flex flex-wrap gap-2">
                 {directorConsultingTargets.map(student => (
                   <label key={`director-target-${student.id}`} className="inline-flex flex-wrap items-center gap-1 rounded border border-indigo-200 bg-white px-2 py-1 text-sm">
-                    <input type="checkbox" checked={student.completed} disabled={student.completed}
+                    <input type="checkbox" checked={false} aria-label={`${student.name} 원장 컨설팅 완료`}
                       title="진행 완료" onChange={e => { if (e.target.checked) completeDirectorConsulting(student.id); }} />
                     <span className="font-medium">{student.name}</span>
                     <span className="text-xs text-slate-600">{student.status}</span>
@@ -2727,7 +2812,7 @@ export default function MentorAssignmentPage() {
                 ))}
               </div>
             ) : <div className="text-sm text-gray-500">지정된 학생이 없습니다.</div>}
-            <p className="mt-2 text-xs text-gray-500">목록 등록 즉시 원장으로 임시 지정됩니다. 시간 배정은 하지 않으며, 다음 멘토 자동배정 시 임시 지정이 해제되고 저장된 고정 멘토로 돌아갑니다.</p>
+            <p className="mt-2 text-xs text-gray-500">완료 체크한 학생은 이번 주 목록에서 사라집니다. 임시 지정은 다음 자동배정 때 해제되며, 매주 원장 지정은 계속 유지됩니다.</p>
           </div>
         </div>
         <div className="border rounded p-3 bg-rose-50 shadow-sm">
