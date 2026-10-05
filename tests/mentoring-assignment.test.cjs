@@ -486,6 +486,27 @@ function completeDirector(id) {
     .props.onChange({ target: { checked: true } });
 }
 
+test("고정 멘토 확인 즉시 선택멘토와 불일치 시간표에 반영하고 리셋/재접속에도 표시한다", () => {
+  setup([student(1)], [{ name: "홍선영M", time: "13:00~14:00" }]);
+  nodes(render()).find(node => node.props["aria-label"] === "고정 멘토 설정 학생 검색").props.onChange({ value: 1 });
+  select("학생1 매주 고정 멘토", "홍선영M");
+  button("확인").props.onClick();
+  assert.equal(current.students[0].selectedMentor, "홍선영M");
+  assert.equal(rec(1).mentor, "홍선영M");
+  const timeline = () => nodes(render()).find(node => node.type === "div" && nodes(node).some(child => child.type === "h2" && text(child) === "요일별 멘토링 진행 현황표 (시간대 기준)"));
+  assert.match(text(timeline()), /홍선영M \(1\/1명\)/);
+  assert.match(text(timeline()), /13:00~13:20학생1/);
+  auto();
+  assert.equal(current.students[0].selectedMentor, "홍선영M");
+  assert.match(text(timeline()), /13:00~13:20학생1/);
+  current.students = JSON.parse(JSON.stringify(current.students));
+  hooks = [];
+  assert.match(text(timeline()), /13:00~13:20학생1/);
+  current.mentorAssignmentSnapshots[week1] = { timelineByDay: {} };
+  current.attendance[week1][1] = {};
+  assert.match(text(timeline()), /13:00~13:20학생1/, "출결이 없고 오래된 저장 시간표가 있어도 고정 학생 표시");
+});
+
 test("원장 완료 체크는 즉시 목록에서 숨기고 재접속에도 완료 이력을 유지한다", () => {
   setup([student(1), student(2)]);
   designateDirector("학생1, 학생2");

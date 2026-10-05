@@ -369,7 +369,18 @@ export default function MentorAssignmentPage() {
   const saveFixedMentor = () => {
     if (!fixedMentorStudent) return;
     const mentor = n(fixedMentorDraft ?? getSavedFixedMentor(fixedMentorStudent));
-    setStudents(prev => prev.map(s => s.id === fixedMentorStudent.id ? { ...s, persistentFixedMentor: mentor, fixedMentor: "" } : s));
+    setStudents(prev => prev.map(s => {
+      if (s.id !== fixedMentorStudent.id) return s;
+      const next = { ...s, persistentFixedMentor: mentor, fixedMentor: "" };
+      if (!mentor || !selectedPeriod || isRecurringDirectorConsulting(s) || isDirectorConsultingPending(s, selectedPeriod)) return next;
+      const assigned = clearCurrentMentoring(next);
+      const day = resolveReassignmentDay(next, mentor);
+      assigned.selectedMentor = mentor;
+      assigned.selectedMentorDay = day;
+      assigned.mentorHistory[selectedPeriod] = { mentor, actualMentor: mentor, day, attended: true, missedCarryOver: false };
+      return assigned;
+    }));
+    setTimelineViewMode("computed");
     setFixedMentorDraft(null);
     setFixedMentorSaveMessage(mentor
       ? `${fixedMentorStudent.name} → ${mentor} 저장했습니다.`
@@ -1382,12 +1393,12 @@ export default function MentorAssignmentPage() {
           best = { day, ov };
         }
       });
-      return best.day;
+      return best.day || (getSavedFixedMentor(student) ? workingDays(mentor, mentorsByDay)[0] || DAYS[0] : "");
     };
 
     const studentsByMentorDay = DAYS.reduce((acc, d) => ({ ...acc, [d]: {} }), {});
     students.forEach(student => {
-      if (isMentoringOptOut(student)) return;
+      if (isMentoringOptOut(student) && !getSavedFixedMentor(student)) return;
       const mentor = activeMentor(student);
       if (!mentor || mentor === DIRECTOR_MENTOR_NAME) return;
       const day = resolveAssignedDay(student, mentor);
@@ -1480,7 +1491,8 @@ export default function MentorAssignmentPage() {
             if (!student) return null;
             const attRanges = normalizeAttendanceRanges(periodAttendance?.[student.id]?.[day]);
             const attLabel = attendanceLabelFromRanges(attRanges);
-            if (!attRanges.length) {
+            const forcedFixed = getSavedFixedMentor(student) === mentor;
+            if (!attRanges.length && !forcedFixed) {
               return {
                 studentId: student.id,
                 studentName: student.name,
@@ -1494,7 +1506,7 @@ export default function MentorAssignmentPage() {
             const eligible = [];
             slots.forEach((slot, idx) => {
               const ov = overlapWithAnyRange(attRanges, slot.startMin, slot.endMin);
-              if (ov >= requiredOverlapMinutes) eligible.push(idx);
+              if (forcedFixed || ov >= requiredOverlapMinutes) eligible.push(idx);
             });
 
             let fixedIdx = -1;
@@ -1511,7 +1523,7 @@ export default function MentorAssignmentPage() {
               studentId: student.id,
               studentName: student.name,
               studentAttendanceLabel: attLabel,
-              attStart: Math.min(...attRanges.map(v => v.st)),
+              attStart: attRanges.length ? Math.min(...attRanges.map(v => v.st)) : 9999,
               eligible,
               fixedIdx,
             };
@@ -1615,7 +1627,7 @@ export default function MentorAssignmentPage() {
     return timeline;
   }, [savedSnapshot, students, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
   const hasSavedSnapshot = Boolean(savedSnapshot?.timelineByDay);
-  const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed";
+  const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed" && !students.some(s => getSavedFixedMentor(s) && activeMentor(s) !== DIRECTOR_MENTOR_NAME);
   const displayTimelineByDay = showingSavedSnapshot
     ? savedTimelineByDay
     : normalizedTimelineByDay;
