@@ -25,6 +25,21 @@ export function getSavedFixedMentor(student) {
   return legacy === DIRECTOR_MENTOR_NAME ? "" : legacy;
 }
 
+export function assignSavedFixedMentor(student, periodId, fallbackDay = "") {
+  const mentor = getSavedFixedMentor(student);
+  if (!mentor || !periodId || isRecurringDirectorConsulting(student) || isDirectorConsultingPending(student, periodId)) return student;
+  const old = student.mentorHistory?.[periodId] || {};
+  const sameMentor = clean(old.mentor) === mentor && clean(old.actualMentor || old.mentor) === mentor;
+  const record = { ...old, mentor, actualMentor: mentor, day: sameMentor ? clean(old.day) || fallbackDay : fallbackDay };
+  for (const key of ["fixedNoOverlap", "assignmentIssue", "pendingReassignment"]) delete record[key];
+  if (!sameMentor) {
+    for (const key of ["slotStart", "slotEnd", "sessionMinutes", "autoRank", "manualApplied", "manualMentor"]) delete record[key];
+  }
+  if (student.selectedMentor === mentor && student.selectedMentorDay === record.day && JSON.stringify(old) === JSON.stringify(record)) return student;
+  return { ...student, selectedMentor: mentor, selectedMentorDay: record.day,
+    mentorHistory: { ...(student.mentorHistory || {}), [periodId]: record } };
+}
+
 export function releaseDirectorConsulting(student, periodId) {
   if (isRecurringDirectorConsulting(student)) return student;
   return isDirectorConsultingPending(student, periodId)

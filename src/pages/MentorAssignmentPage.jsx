@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import Select from "react-select";
 import { useSchedule } from "../context/ScheduleContext";
 import StudentMentorOverlapTable from "../components/StudentMentorOverlapTable";
-import { DIRECTOR_MENTOR_NAME, getPriorityMentor, getSavedFixedMentor, isRecurringDirectorConsulting, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
+import { DIRECTOR_MENTOR_NAME, getPriorityMentor, getSavedFixedMentor, assignSavedFixedMentor, isRecurringDirectorConsulting, isDirectorConsultingPending, setDirectorConsultingStatus, assignDirectorConsulting } from "../utils/mentoringPriority.mjs";
 
 const DAYS = ["\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
 const DAY_LABEL_BY_JS = ["\uC77C", "\uC6D4", "\uD654", "\uC218", "\uBAA9", "\uAE08", "\uD1A0"];
@@ -414,13 +414,13 @@ export default function MentorAssignmentPage() {
   useEffect(() => {
     if (!selectedPeriod) return;
     const normalize = s => isRecurringDirectorConsulting(s) ? assignDirectorConsulting(s, selectedPeriod) :
-      !isDirectorConsultingPending(s, selectedPeriod) ? s :
+      !isDirectorConsultingPending(s, selectedPeriod) ? assignSavedFixedMentor(s, selectedPeriod, workingDays(getSavedFixedMentor(s), mentorsByDay)[0] || DAYS[0]) :
       !s.directorConsultingByPeriod ? setDirectorConsultingStatus(s, selectedPeriod, "pending") :
       assignDirectorConsulting(s, selectedPeriod);
     if (students.some(s => normalize(s) !== s)) {
       setStudents(prev => prev.map(normalize));
     }
-  }, [students, selectedPeriod, setStudents]);
+  }, [students, selectedPeriod, setStudents, mentorsByDay]);
 
   const pList = useMemo(() => sortedPeriods(periods), [periods]);
   const prevPeriodId = useMemo(() => {
@@ -1204,6 +1204,7 @@ export default function MentorAssignmentPage() {
             next.mentorHistory[selectedPeriod].mentor = fixed;
             next.mentorHistory[selectedPeriod].actualMentor = fixed;
           }
+          if (fixed) return assignSavedFixedMentor(next, selectedPeriod, workingDays(fixed, mentorsByDay)[0] || DAYS[0]);
           next.mentorHistory[selectedPeriod].assignmentIssue = pick[s.id]?.issue || "미배정";
           return next;
         }
@@ -1782,7 +1783,7 @@ export default function MentorAssignmentPage() {
     .sort((a, b) => n(a.name).localeCompare(n(b.name), "ko"));
 
   const reassignmentStudents = selectedPeriod ? students.filter(s =>
-    (!isMentoringOptOut(s) || getSavedFixedMentor(s)) && (!activeMentor(s) || (getSavedFixedMentor(s) && activeMentor(s) !== DIRECTOR_MENTOR_NAME && s.mentorHistory?.[selectedPeriod]?.assignmentIssue))
+    !getSavedFixedMentor(s) && !isMentoringOptOut(s) && !activeMentor(s)
   ).map(student => {
     const rec = student.mentorHistory?.[selectedPeriod] || {};
     const priority = getPriorityMentor(student, selectedPeriod);
@@ -2451,7 +2452,7 @@ export default function MentorAssignmentPage() {
       <section className="border rounded p-4 bg-emerald-50" aria-label="학생별 고정 멘토 설정">
         <h2 className="text-lg font-semibold">학생별 고정 멘토 설정 (매주 유지)</h2>
         <p className="text-sm text-gray-600 mt-1 mb-3">
-          학생을 검색해 고정 멘토를 설정하세요. 원장 임시 지정은 다음 자동배정 때 해제되며, 저장된 고정 멘토가 우선 적용됩니다.
+          학생을 검색해 고정 멘토를 설정하세요. 시간 일치 여부와 관계없이 선택멘토로 바로 적용됩니다. 이번 주 원장 지정이 있으면 원장님이 우선 적용됩니다.
         </p>
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 max-w-2xl">
           <div className="w-full sm:w-80">
@@ -2493,7 +2494,7 @@ export default function MentorAssignmentPage() {
           </button>
         </div>
         {fixedMentorSaveMessage ? <p role="status" className="mt-2 text-sm text-emerald-800">{fixedMentorSaveMessage}</p> : null}
-        <p className="text-xs text-gray-500 mt-2">확인을 누르면 아래 고정멘토 열에 표시됩니다. 주간 배정에는 멘토 배정하기로 적용됩니다. 설정 안 함을 저장하면 고정이 해제됩니다.</p>
+        <p className="text-xs text-gray-500 mt-2">확인을 누르면 선택멘토와 요일별 현황표에 즉시 반영됩니다. 고정 학생은 대체 멘토 지정 대상에서 제외됩니다. 설정 안 함을 저장하면 고정이 해제됩니다.</p>
         <div className="mt-3 border-t border-emerald-200 pt-3" aria-label="저장된 고정 멘토 목록">
           <h3 className="text-sm font-semibold mb-2">고정 멘토 설정 학생 · {savedFixedMentorStudents.length}명</h3>
           {savedFixedMentorStudents.length ? (

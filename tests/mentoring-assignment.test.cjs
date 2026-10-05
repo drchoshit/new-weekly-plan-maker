@@ -157,7 +157,7 @@ test("고정 멘토는 일반 학생보다 먼저 배정하고 정원을 초과�
   assert.equal(rec(1).mentor, undefined);
   assert.equal(rec(3).mentor, "멘토A");
   assert.equal(rec(3).slotStart, undefined);
-  assert.match(rec(3).assignmentIssue, /슬롯 없음/);
+  assert.equal(rec(3).assignmentIssue, undefined);
 });
 
 test("미희망 학생은 제외하고 복수 출결 구간을 사용할 수 있다", () => {
@@ -198,14 +198,15 @@ test("고정 멘토도 멘토별 정원 제한을 지킨다", () => {
   assert.equal(rec(1).mentor, "멘토A");
   assert.equal(rec(2).mentor, "멘토A");
   assert.equal(rec(2).slotStart, undefined);
-  assert.match(rec(2).assignmentIssue, /정원/);
+  assert.equal(rec(2).assignmentIssue, undefined);
 });
 
 test("파일 저장/복구 및 재접속 이후 고정 멘토와 시간 조정 대기가 유지된다", async () => {
   setup([student(1, { persistentFixedMentor: "멘토A", directorConsultingByPeriod: { [week1]: { status: "completed" } } })],
     [{ name: "원장님", time: "13:00~14:00" }, { name: "멘토A", time: "13:00~14:00" }]);
   auto();
-  applyAlternative(1, "멘토A");
+  assert.equal(rec(1).mentor, "멘토A");
+  assert.doesNotMatch(text(nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생")), /학생1/);
   let exported;
   const create = URL.createObjectURL;
   const revoke = URL.revokeObjectURL;
@@ -223,11 +224,11 @@ test("파일 저장/복구 및 재접속 이후 고정 멘토와 시간 조정 �
   const upload = nodes(render()).find(node => node.type === "input" && node.props.type === "file");
   await upload.props.onChange({ target: { value: "test.json", files: [{ name: "test.json", text: async () => savedText }] } });
   assert.equal(current.students[0].persistentFixedMentor, "멘토A");
-  assert.deepEqual(rec(1).pendingReassignment, { mentor: "멘토A", day: "월" });
+  assert.equal(rec(1).pendingReassignment, undefined);
   // 로컬/서버 저장과 동일한 JSON 왕복 후 페이지 상태를 새로 만든다.
   current.students = JSON.parse(JSON.stringify(current.students));
   hooks = [];
-  assert.match(text(render()), /희망 배정: 멘토A/);
+  assert.equal(current.students[0].selectedMentor, "멘토A");
   current.selectedPeriod = week2;
   current.attendance[week2][1].월 = ["13:00", "14:00"];
   auto();
@@ -498,6 +499,7 @@ test("고정 멘토 확인 즉시 선택멘토와 불일치 시간표에 반영�
   assert.match(text(timeline()), /13:00~13:20학생1/);
   auto();
   assert.equal(current.students[0].selectedMentor, "홍선영M");
+  assert.doesNotMatch(text(nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생")), /학생1/);
   assert.match(text(timeline()), /13:00~13:20학생1/);
   current.students = JSON.parse(JSON.stringify(current.students));
   hooks = [];
@@ -505,6 +507,21 @@ test("고정 멘토 확인 즉시 선택멘토와 불일치 시간표에 반영�
   current.mentorAssignmentSnapshots[week1] = { timelineByDay: {} };
   current.attendance[week1][1] = {};
   assert.match(text(timeline()), /13:00~13:20학생1/, "출결이 없고 오래된 저장 시간표가 있어도 고정 학생 표시");
+});
+
+test("기존 고정 학생의 희망 배정과 시간 불일치 기록은 실제 선택멘토로 복구한다", async () => {
+  const { assignSavedFixedMentor } = await import("../src/utils/mentoringPriority.mjs");
+  const old = student(1, { persistentFixedMentor: "홍선영M", selectedMentor: "", mentorHistory: {
+    [week1]: { assignmentIssue: "시간 미일치", pendingReassignment: { mentor: "홍선영M", day: "월" } },
+    [week2]: { mentor: "이전기록" },
+  } });
+  const repaired = assignSavedFixedMentor(old, week1, "월");
+  assert.equal(repaired.selectedMentor, "홍선영M");
+  assert.equal(repaired.mentorHistory[week1].actualMentor, "홍선영M");
+  assert.equal(repaired.mentorHistory[week1].assignmentIssue, undefined);
+  assert.equal(repaired.mentorHistory[week1].pendingReassignment, undefined);
+  assert.deepEqual(repaired.mentorHistory[week2], old.mentorHistory[week2]);
+  assert.equal(assignSavedFixedMentor(repaired, week1, "월"), repaired);
 });
 
 test("원장 완료 체크는 즉시 목록에서 숨기고 재접속에도 완료 이력을 유지한다", () => {
