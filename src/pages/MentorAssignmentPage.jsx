@@ -276,6 +276,7 @@ const normalizeTimelineByDay = timelineByDay =>
           unassigned: Array.isArray(info?.unassigned)
             ? info.unassigned.map(v => n(v)).filter(Boolean)
             : [],
+          timeMismatch: Array.isArray(info?.timeMismatch) ? info.timeMismatch.map(v => n(v)).filter(Boolean) : [],
           assignedCount: Number(info?.assignedCount || 0),
           requestCount: Number(info?.requestCount || 0),
         };
@@ -503,6 +504,7 @@ export default function MentorAssignmentPage() {
     delete old.slotEnd;
     delete old.sessionMinutes;
     delete old.fixedNoOverlap;
+    delete old.forcedReassignment;
     delete old.assignmentIssue;
     delete old.pendingReassignment;
     return {
@@ -528,6 +530,7 @@ export default function MentorAssignmentPage() {
     const rec = student?.mentorHistory?.[selectedPeriod] || {};
     const mentor = n(rec.actualMentor) || n(rec.mentor);
     if (mentor === DIRECTOR_MENTOR_NAME) return mentor;
+    if (rec.forcedReassignment && mentor) return mentor;
     // 이전 강제 배정 기록도 시간표와 실제 배정 인원에서 제외한다.
     const fits = DAY_SET.has(n(rec.day))
       ? hasOverlapOnDay(student, mentor, rec.day)
@@ -640,7 +643,7 @@ export default function MentorAssignmentPage() {
     ].join("\n");
   };
 
-  const commitMentor = (student, mentorName, day) => {
+  const commitMentor = (student, mentorName, day, force = false) => {
     if (!selectedPeriod || !mentorName) return;
     if (isRecurringDirectorConsulting(student)) {
       setStudents(prev => prev.map(s => s.id === student.id ? assignDirectorConsulting(s, selectedPeriod) : s));
@@ -653,7 +656,8 @@ export default function MentorAssignmentPage() {
       return true;
     }
     const pickedDay = n(day) || workingDays(mentorName, mentorsByDay)[0] || "";
-    if (!hasOverlapOnDay(student, mentorName, pickedDay)) {
+    const fits = hasOverlapOnDay(student, mentorName, pickedDay);
+    if (!fits && !force) {
       setStudents(prev => prev.map(s => {
         if (s.id !== student.id) return s;
         const next = clearCurrentMentoring(s);
@@ -696,7 +700,8 @@ export default function MentorAssignmentPage() {
               missedCarryOver: false,
               missedDay: undefined,
               fixedNoOverlap: false,
-              assignmentIssue: undefined,
+              forcedReassignment: force,
+              assignmentIssue: fits ? undefined : "시간 미일치",
               pendingReassignment: undefined,
             },
           },
@@ -1232,6 +1237,7 @@ export default function MentorAssignmentPage() {
               missedDay: undefined,
               autoRank: 1,
               fixedNoOverlap: false,
+              forcedReassignment: false,
               assignmentIssue: undefined,
               pendingReassignment: undefined,
             },
@@ -1548,6 +1554,7 @@ export default function MentorAssignmentPage() {
 
         const used = new Set();
         const unassigned = [];
+        const timeMismatch = [];
 
         fixedRequests.forEach(req => {
           if (!used.has(req.fixedIdx) && req.eligible.includes(req.fixedIdx)) {
@@ -1580,13 +1587,15 @@ export default function MentorAssignmentPage() {
             slots[picked].studentName = req.studentName;
             slots[picked].studentAttendanceLabel = req.studentAttendanceLabel || "";
           } else {
-            unassigned.push(req.studentName);
+            if (!req.eligible.length) timeMismatch.push(req.studentName);
+            else unassigned.push(req.studentName);
           }
         });
 
         result[day][mentor] = {
           slots,
           unassigned,
+          timeMismatch,
           assignedCount: slots.filter(slot => slot.studentId).length,
           requestCount: requests.length,
         };
@@ -1622,13 +1631,17 @@ export default function MentorAssignmentPage() {
         const student = byName.get(n(name));
         return !student || activeMentor(student) === mentor;
       });
+      info.timeMismatch = info.timeMismatch.filter(name => {
+        const student = byName.get(n(name));
+        return !student || activeMentor(student) === mentor;
+      });
       info.assignedCount = info.slots.filter(slot => slot.studentId != null).length;
-      info.requestCount = info.assignedCount + info.unassigned.length;
+      info.requestCount = info.assignedCount + info.unassigned.length + info.timeMismatch.length;
     }));
     return timeline;
   }, [savedSnapshot, students, selectedPeriod, periodAttendance, mentorsByDay, minOverlapRequired]);
   const hasSavedSnapshot = Boolean(savedSnapshot?.timelineByDay);
-  const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed" && !students.some(s => getSavedFixedMentor(s) && activeMentor(s) !== DIRECTOR_MENTOR_NAME);
+  const showingSavedSnapshot = hasSavedSnapshot && timelineViewMode !== "computed" && !students.some(s => (getSavedFixedMentor(s) || s.mentorHistory?.[selectedPeriod]?.forcedReassignment) && activeMentor(s) !== DIRECTOR_MENTOR_NAME);
   const displayTimelineByDay = showingSavedSnapshot
     ? savedTimelineByDay
     : normalizedTimelineByDay;
@@ -1810,7 +1823,7 @@ export default function MentorAssignmentPage() {
     const draft = reassignmentDrafts[student.id] || student.mentorHistory?.[selectedPeriod]?.pendingReassignment || {};
     const day = resolveReassignmentDay(student, draft.mentor);
     if (!draft.mentor || !day) return;
-    const assigned = commitMentor(student, draft.mentor, day);
+    const assigned = commitMentor(student, draft.mentor, day, true);
     setPopup({
       title: assigned ? "대체 멘토 배정 완료" : "대체 멘토 희망 배정 저장",
       text: assigned
@@ -1838,6 +1851,7 @@ export default function MentorAssignmentPage() {
         fixedMentor: n(student.fixedMentor),
         directorConsulting: student.directorConsultingByPeriod?.[selectedPeriod] || null,
         assignmentIssue: mentor === DIRECTOR_MENTOR_NAME ? "" : n(rec.assignmentIssue),
+        forcedReassignment: rec.forcedReassignment === true,
         pendingReassignment: mentor === DIRECTOR_MENTOR_NAME ? null : rec.pendingReassignment || null,
         mentor: mentor || "",
         day: day || "",
@@ -2053,6 +2067,7 @@ export default function MentorAssignmentPage() {
                 mentor,
                 actualMentor: mentor,
                 fixedNoOverlap: false,
+                forcedReassignment: row.forcedReassignment === true,
                 assignmentIssue: n(row.assignmentIssue) || undefined,
                 pendingReassignment: row.pendingReassignment || undefined,
                 day,
@@ -2526,7 +2541,7 @@ export default function MentorAssignmentPage() {
         <h2 className="text-lg font-semibold">시간 불일치 / 미배정 · 대체 멘토 지정</h2>
         <p className="text-sm text-gray-600 my-2">
           멘토만 선택하면 총괄멘토 Info의 근무 요일로 자동 배정됩니다. 여러 요일에 출근하면 학생과 시간이 맞는 요일을 우선합니다.
-          시간이 맞지 않으면 희망 배정으로 저장됩니다.
+          시간이 맞으면 빈 슬롯에 배정하고, 맞지 않아도 선택한 멘토로 강제 배정한 뒤 현황표에 시간미일치로 표시합니다.
         </p>
         {!reassignmentStudents.length ? <p className="text-sm text-gray-500">해당 학생 없음</p> : (
           <div className="overflow-x-auto">
@@ -2943,6 +2958,11 @@ export default function MentorAssignmentPage() {
                         멘토 근무 시간이 설정되지 않아 시간 슬롯을 만들 수 없습니다.
                       </div>
                     )}
+                    {info.timeMismatch.length > 0 ? (
+                      <div className="text-xs text-red-600 mt-1">
+                        시간미일치: {info.timeMismatch.join(", ")}
+                      </div>
+                    ) : null}
                     {info.unassigned.length > 0 ? (
                       <div className="text-xs text-red-600 mt-1">
                         미배정: {info.unassigned.join(", ")}

@@ -137,15 +137,23 @@ test("원장 컨설팅은 시간 불일치여도 확정하며 재배정 목록�
   assert.equal(current.students[0].persistentFixedMentor, "멘토A");
 });
 
-test("모든 멘토와 시간 불일치면 희망 배정을 보존하고 시간 조정 후 확정한다", () => {
+test("시간 불일치 대체 배정은 확정되고 누락 목록에서 빠지며 시간 조정 후 슬롯에 들어간다", () => {
   setup([student(1)], [{ name: "멘토A", time: "13:00~14:00" }]);
   auto();
   assert.match(rec(1).assignmentIssue, /모든 멘토와 시간 미일치/);
   applyAlternative(1, "멘토A");
-  assert.equal(rec(1).mentor, undefined);
-  assert.deepEqual(rec(1).pendingReassignment, { mentor: "멘토A", day: "월" });
+  assert.equal(rec(1).mentor, "멘토A");
+  assert.equal(rec(1).forcedReassignment, true);
+  assert.equal(rec(1).pendingReassignment, undefined);
+  assert.match(text(render()), /시간미일치: 학생1/);
+  const missing = nodes(render()).find(node => node.type === "div" && node.props.className === "border rounded p-3 bg-rose-50 shadow-sm");
+  assert.doesNotMatch(text(missing), /학생1/);
+  current.mentorAssignmentSnapshots[week1] = { timelineByDay: {} };
+  hooks = [];
+  assert.match(text(render()), /시간미일치: 학생1/, "재접속과 기존 저장본이 있어도 강제 배정 표시");
   current.attendance[week1][1].월 = ["13:00", "14:00"];
-  applyAlternative(1, "멘토A");
+  assert.doesNotMatch(text(render()), /시간미일치: 학생1/);
+  assert.match(text(render()), /13:00~13:20학생1/);
   assert.equal(rec(1).mentor, "멘토A");
   assert.equal(rec(1).pendingReassignment, undefined);
 });
@@ -256,19 +264,14 @@ test("대체 멘토만 선택하면 근무 요일 중 학생과 시간이 맞는
   assert.equal(rec(1).day, "수");
 });
 
-test("시간이 모두 안 맞아도 멘토 출근일로 희망 배정하며 변경된 근무표를 반영한다", () => {
+test("시간이 모두 안 맞아도 멘토 출근일로 강제 배정한다", () => {
   setup([student(1)]);
   current.mentorsByDay = { 목: [{ name: "멘토A", time: "13:00~14:00" }] };
   applyAlternative(1, "멘토A");
-  assert.deepEqual(rec(1).pendingReassignment, { mentor: "멘토A", day: "목" });
-  current.mentorsByDay = { 금: [{ name: "멘토A", time: "09:00~11:00" }] };
-  current.attendance[week1][1].금 = ["09:00", "10:00"];
-  // 이전 희망 요일을 사용하지 않고 총괄멘토 Info의 현재 근무표로 다시 계산한다.
-  hooks = [];
-  const panel = nodes(render()).find(node => node.props["aria-label"] === "시간 불일치 및 미배정 학생");
-  button("적용", panel).props.onClick();
-  assert.equal(rec(1).day, "금");
+  assert.equal(rec(1).pendingReassignment, undefined);
+  assert.equal(rec(1).day, "목");
   assert.equal(rec(1).mentor, "멘토A");
+  assert.match(text(render()), /시간미일치: 학생1/);
 });
 
 test("근무 요일이 삭제된 대체 멘토는 임의의 요일로 배정하지 않는다", () => {
